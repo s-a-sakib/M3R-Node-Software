@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Transactions - M3R Wallet Admin</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .header {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin-bottom: 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .header h1 {
+            color: #333;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 15px;
+        }
+
+        .nav-links a {
+            display: inline-block;
+            padding: 10px 20px;
+            background: #667eea;
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+            transition: background 0.3s;
+        }
+
+        .nav-links a:hover {
+            background: #764ba2;
+        }
+
+        .controls {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+        }
+
+        .controls select, .controls button {
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            margin-right: 10px;
+        }
+
+        .controls button {
+            background: #667eea;
+            color: white;
+            cursor: pointer;
+            border: none;
+            transition: background 0.3s;
+        }
+
+        .controls button:hover {
+            background: #764ba2;
+        }
+
+        .table-container {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        table th {
+            background: #667eea;
+            color: white;
+            padding: 12px;
+            text-align: left;
+            font-weight: 600;
+        }
+
+        table td {
+            padding: 12px;
+            border-bottom: 1px solid #eee;
+        }
+
+        table tr:hover {
+            background: #f5f5f5;
+        }
+
+        .hash {
+            font-family: monospace;
+            font-size: 12px;
+            color: #666;
+            word-break: break-all;
+        }
+
+        .status {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 3px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .status.confirmed {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status.pending {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .status.rejected {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .empty {
+            text-align: center;
+            padding: 40px;
+            color: #999;
+        }
+
+        .timestamp {
+            font-size: 12px;
+            color: #999;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Transactions Management</h1>
+            <div class="nav-links">
+                <a href="/admin">Dashboard</a>
+                <a href="/admin/accounts">Accounts</a>
+                <a href="/admin/transactions">Transactions</a>
+                <a href="/admin/escrows">Escrows</a>
+            </div>
+        </div>
+
+        <div class="controls">
+            <select id="networkSelect" th:value="${network}">
+                <option th:each="net : ${networks}" th:value="${net}" th:text="${net}" th:selected="${net == network}"></option>
+            </select>
+            <button onclick="window.location = '/admin/transactions?network=' + document.getElementById('networkSelect').value">Filter</button>
+        </div>
+
+        <div class="table-container">
+            <h2 style="margin-bottom: 20px; color: #333;" th:text="'Transactions - ' + ${network}"></h2>
+            
+            <div th:if="${transactions.isEmpty()}" class="empty">
+                <p>No transactions found on this network</p>
+            </div>
+
+            <table th:if="${!transactions.isEmpty()}">
+                <thead>
+                    <tr>
+                        <th>Hash</th>
+                        <th>Status</th>
+                        <th>Network</th>
+                        <th>Created At</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr th:each="tx : ${transactions}">
+                        <td class="hash" th:text="${tx.hash}"></td>
+                        <td>
+                            <span class="status" th:classappend="${'status-' + tx.status.toLowerCase()}" th:text="${tx.status}"></span>
+                        </td>
+                        <td th:text="${tx.network}"></td>
+                        <td class="timestamp" th:text="${#dates.format(new java.util.Date(tx.createdAt), 'yyyy-MM-dd HH:mm:ss')}"></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</body>
+</html>

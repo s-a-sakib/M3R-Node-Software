@@ -1,0 +1,52 @@
+spring:
+  application:
+    name: m3r-wallet-server
+  datasource:
+    url: jdbc:mysql://localhost:3306/m3rwallet_db?allowPublicKeyRetrieval=true&useSSL=false&serverTimezone=UTC
+    username: root
+    password: 20027323606000043
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      connection-timeout: 30000
+      maximum-pool-size: 10
+      minimum-idle: 2
+      auto-commit: true
+      pool-name: M3R-Pool
+  jpa:
+    database-platform: org.hibernate.dialect.MySQLDialect
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+        enable_lazy_load_no_trans: true
+  thymeleaf:
+    cache: false
+    enabled: true
+
+server:
+  port: 3000
+  servlet:
+    context-path: /
+
+logging:
+  level:
+    root: INFO
+    com.m3rwallet: DEBUG
+    org.hibernate.SQL: DEBUG
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
+
+# Application Configuration
+app:
+  broadcast-fee: 100
+  percent-fee-bps: 100
+  genesis-address: NQWWb4huPaqUncdJHFm2FHFjTo1qqLskuq
+  cors-origins: 
+  faucet:
+    max-amount: 100000
+    rate-limit-per-hour: 5
+  rate-limit:
+    global-requests-per-minute: 100
+    tx-submit-per-minute: 20

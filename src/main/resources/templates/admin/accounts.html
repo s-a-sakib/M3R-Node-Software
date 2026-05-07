@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Accounts - M3R Wallet Admin</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .header {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin-bottom: 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .header h1 {
+            color: #333;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 15px;
+        }
+
+        .nav-links a {
+            display: inline-block;
+            padding: 10px 20px;
+            background: #667eea;
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+            transition: background 0.3s;
+        }
+
+        .nav-links a:hover {
+            background: #764ba2;
+        }
+
+        .controls {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+        }
+
+        .controls select, .controls input, .controls button {
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            margin-right: 10px;
+        }
+
+        .controls button {
+            background: #667eea;
+            color: white;
+            cursor: pointer;
+            border: none;
+            transition: background 0.3s;
+        }
+
+        .controls button:hover {
+            background: #764ba2;
+        }
+
+        .table-container {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        table th {
+            background: #667eea;
+            color: white;
+            padding: 12px;
+            text-align: left;
+            font-weight: 600;
+        }
+
+        table td {
+            padding: 12px;
+            border-bottom: 1px solid #eee;
+        }
+
+        table tr:hover {
+            background: #f5f5f5;
+        }
+
+        .address {
+            font-family: monospace;
+            font-size: 12px;
+            color: #666;
+            word-break: break-all;
+        }
+
+        .empty {
+            text-align: center;
+            padding: 40px;
+            color: #999;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Accounts Management</h1>
+            <div class="nav-links">
+                <a href="/admin">Dashboard</a>
+                <a href="/admin/accounts">Accounts</a>
+                <a href="/admin/transactions">Transactions</a>
+                <a href="/admin/escrows">Escrows</a>
+            </div>
+        </div>
+
+        <div class="controls">
+            <select id="networkSelect" th:value="${network}">
+                <option th:each="net : ${networks}" th:value="${net}" th:text="${net}" th:selected="${net == network}"></option>
+            </select>
+            <button onclick="window.location = '/admin/accounts?network=' + document.getElementById('networkSelect').value">Filter</button>
+        </div>
+
+        <div class="table-container">
+            <h2 style="margin-bottom: 20px; color: #333;" th:text="'Accounts - ' + ${network}"></h2>
+            
+            <div th:if="${accounts.isEmpty()}" class="empty">
+                <p>No accounts found on this network</p>
+            </div>
+
+            <table th:if="${!accounts.isEmpty()}">
+                <thead>
+                    <tr>
+                        <th>Address</th>
+                        <th>Balance</th>
+                        <th>Nonce</th>
+                        <th>Network</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr th:each="acc : ${accounts}">
+                        <td class="address" th:text="${acc.address}"></td>
+                        <td th:text="${acc.balance}"></td>
+                        <td th:text="${acc.nonce}"></td>
+                        <td th:text="${acc.network}"></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</body>
+</html>
