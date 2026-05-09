@@ -65,7 +65,7 @@
             margin-bottom: 20px;
         }
 
-        .controls select, .controls button {
+        .controls select, .controls input, .controls button {
             padding: 10px;
             border: 1px solid #ddd;
             border-radius: 5px;
@@ -172,7 +172,9 @@
             <select id="networkSelect" th:value="${network}">
                 <option th:each="net : ${networks}" th:value="${net}" th:text="${net}" th:selected="${net == network}"></option>
             </select>
-            <button onclick="window.location = '/admin/transactions?network=' + document.getElementById('networkSelect').value">Filter</button>
+            <input id="searchInput" type="search" placeholder="Search hash or status" th:value="${q}">
+            <button onclick="window.location = '/admin/transactions?network=' + document.getElementById('networkSelect').value + '&q=' + encodeURIComponent(document.getElementById('searchInput').value)">Search</button>
+            <button onclick="window.location = '/admin/transactions?network=' + document.getElementById('networkSelect').value">Clear</button>
         </div>
 
         <div class="table-container">

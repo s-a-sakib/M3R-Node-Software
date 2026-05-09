@@ -2,6 +2,8 @@
 
 A complete migration of the M3R Wallet Node.js server to **Spring Boot with MySQL** backend, featuring a secure Admin Dashboard accessible only from localhost.
 
+For the full system document, including the Android app and the complete 3-node local runbook, see the project-level [`../README.md`](../README.md).
+
 ## Features
 
 ✅ **RESTful API** - Complete wallet transaction endpoints  
@@ -10,6 +12,7 @@ A complete migration of the M3R Wallet Node.js server to **Spring Boot with MySQ
 ✅ **Localhost-Only Access** - Admin dashboard restricted to 127.0.0.1  
 ✅ **Multi-Network Support** - Mainnet, Testnet, and Legacy networks  
 ✅ **Transaction Management** - Support for transfers, escrows, releases, and refunds  
+✅ **2/3 Node Consensus** - Optional peer validation before transaction execution  
 ✅ **Rate Limiting** - Built-in protection against abuse  
 ✅ **Crypto Operations** - Keccak256, Base58 encoding, and ECDSA verification  
 
@@ -48,7 +51,7 @@ export CORS_ORIGINS=http://localhost:3000
 ### 3. Build the Project
 
 ```bash
-cd springboot
+cd /home/noob_coder/Desktop/M3R_Coin/Node_Software
 mvn clean install
 ```
 
@@ -80,6 +83,47 @@ GET  /{network}/arbiter/list           - List arbiters
 POST /{network}/faucet                 - Request testnet funds (testnet/legacy only)
 GET  /{network}/health                 - Health check
 ```
+
+### Internal Node Consensus Endpoints
+
+These are called by peer nodes when `app.consensus.enabled=true`.
+
+```
+POST /{network}/node/tx/validate       - Validate without changing database state
+POST /{network}/node/tx/execute        - Execute after quorum is reached
+```
+
+### Running 3 Local Consensus Nodes
+
+Run each node with its own MySQL database, the same genesis data, and the other two node URLs in `app.consensus.peers`. A submit to any node validates locally, asks peers to validate, requires at least 2/3 yes votes, then broadcasts execute.
+
+```bash
+java -jar target/m3r-wallet-server-1.0.0.jar \
+  --server.port=3000 \
+  --spring.datasource.url=jdbc:mysql://localhost:3306/m3rwallet_node_3000?allowPublicKeyRetrieval=true\&useSSL=false\&serverTimezone=UTC \
+  --app.consensus.enabled=true \
+  --app.consensus.peers[0]=http://localhost:4000 \
+  --app.consensus.peers[1]=http://localhost:5000 \
+  --app.consensus.shared-secret=change-this-secret
+
+java -jar target/m3r-wallet-server-1.0.0.jar \
+  --server.port=4000 \
+  --spring.datasource.url=jdbc:mysql://localhost:3306/m3rwallet_node_4000?allowPublicKeyRetrieval=true\&useSSL=false\&serverTimezone=UTC \
+  --app.consensus.enabled=true \
+  --app.consensus.peers[0]=http://localhost:3000 \
+  --app.consensus.peers[1]=http://localhost:5000 \
+  --app.consensus.shared-secret=change-this-secret
+
+java -jar target/m3r-wallet-server-1.0.0.jar \
+  --server.port=5000 \
+  --spring.datasource.url=jdbc:mysql://localhost:3306/m3rwallet_node_5000?allowPublicKeyRetrieval=true\&useSSL=false\&serverTimezone=UTC \
+  --app.consensus.enabled=true \
+  --app.consensus.peers[0]=http://localhost:3000 \
+  --app.consensus.peers[1]=http://localhost:4000 \
+  --app.consensus.shared-secret=change-this-secret
+```
+
+For 5 nodes, each node should list the other 4 peers. The quorum becomes 4 yes votes out of 5.
 
 ### Admin Dashboard (Localhost Only)
 
@@ -129,7 +173,7 @@ http://localhost:3000/admin
 ## Project Structure
 
 ```
-springboot/
+Node_Software/
 ├── pom.xml                           # Maven configuration
 ├── src/main/
 │   ├── java/com/m3rwallet/

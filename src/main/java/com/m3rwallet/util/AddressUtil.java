@@ -3,8 +3,10 @@ package com.m3rwallet.util;
 import org.bitcoinj.core.Base58;
 import org.apache.commons.codec.binary.Hex;
 import java.security.MessageDigest;
+import java.util.Arrays;
 
 public class AddressUtil {
+    private static final byte M3R_VERSION = (byte) 0x35;
 
     /**
      * Normalize address - lowercase and remove 0x prefix
@@ -13,7 +15,32 @@ public class AddressUtil {
         if (addr == null || addr.isEmpty()) {
             return null;
         }
-        return addr.toLowerCase().replace("0x", "");
+        String trimmed = addr.trim();
+        if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
+            return trimmed.substring(2).toLowerCase();
+        }
+        return trimmed.toLowerCase();
+    }
+
+    /**
+     * Resolve an external address into the canonical hex-20 value used by the database.
+     * Base58 is case-sensitive, so callers must not lowercase before decoding.
+     */
+    public static String resolveToHex20(String addr) {
+        if (addr == null || addr.isBlank()) {
+            return null;
+        }
+
+        String trimmed = addr.trim();
+        String noPrefix = (trimmed.startsWith("0x") || trimmed.startsWith("0X"))
+                ? trimmed.substring(2)
+                : trimmed;
+
+        if (noPrefix.matches("(?i)^[0-9a-f]{40}$")) {
+            return noPrefix.toLowerCase();
+        }
+
+        return decodeBase58ToHex20(trimmed);
     }
 
     /**
@@ -23,7 +50,13 @@ public class AddressUtil {
         try {
             byte[] decoded = Base58.decode(pubAddr);
             if (decoded.length == 25) {
-                // Extract 20 bytes from position 1-21 (skip version byte, skip checksum)
+                byte[] data = Arrays.copyOfRange(decoded, 0, 21);
+                byte[] checksum = Arrays.copyOfRange(decoded, 21, 25);
+                byte[] expectedChecksum = checksum(data);
+                if (decoded[0] != M3R_VERSION || !Arrays.equals(checksum, expectedChecksum)) {
+                    return null;
+                }
+
                 byte[] addr20 = new byte[20];
                 System.arraycopy(decoded, 1, addr20, 0, 20);
                 return Hex.encodeHexString(addr20);
@@ -39,16 +72,32 @@ public class AddressUtil {
      */
     public static String encodeHex20ToBase58(String hex20) {
         try {
+            String normalized = normalizeAddr(hex20);
+            if (normalized == null || !normalized.matches("^[0-9a-f]{40}$")) {
+                return hex20;
+            }
+
             byte[] addressBytes = Hex.decodeHex(hex20);
-            byte[] withVersion = new byte[25];
-            withVersion[0] = (byte) 0x26; // Version byte for M3R
-            System.arraycopy(addressBytes, 0, withVersion, 1, 20);
-            // Checksum calculation (simplified - use proper implementation)
-            return Base58.encode(withVersion);
+            byte[] data = new byte[21];
+            data[0] = M3R_VERSION;
+            System.arraycopy(addressBytes, 0, data, 1, 20);
+
+            byte[] checksum = checksum(data);
+            byte[] full = new byte[25];
+            System.arraycopy(data, 0, full, 0, data.length);
+            System.arraycopy(checksum, 0, full, data.length, checksum.length);
+            return Base58.encode(full);
         } catch (Exception e) {
             System.err.println("[Base58 Encode Error] " + e.getMessage());
         }
         return null;
+    }
+
+    private static byte[] checksum(byte[] data) throws Exception {
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        byte[] first = digest.digest(data);
+        byte[] second = digest.digest(first);
+        return Arrays.copyOfRange(second, 0, 4);
     }
 
     /**

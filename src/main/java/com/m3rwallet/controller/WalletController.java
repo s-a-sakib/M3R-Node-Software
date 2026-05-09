@@ -3,6 +3,8 @@ package com.m3rwallet.controller;
 import com.m3rwallet.dto.*;
 import com.m3rwallet.entity.Account;
 import com.m3rwallet.entity.TxLedger;
+import com.m3rwallet.config.ConsensusProperties;
+import com.m3rwallet.service.NodeConsensusService;
 import com.m3rwallet.service.TxLedgerService;
 import com.m3rwallet.service.WalletService;
 import lombok.RequiredArgsConstructor;
@@ -20,6 +22,8 @@ import java.util.stream.Collectors;
 public class WalletController {
     private final WalletService walletService;
     private final TxLedgerService txLedgerService;
+    private final NodeConsensusService nodeConsensusService;
+    private final ConsensusProperties consensusProperties;
 
     /**
      * Factory method to create network-specific routers
@@ -77,30 +81,27 @@ public class WalletController {
     public ResponseEntity<TxResponse> submitTransaction(
             @PathVariable String network,
             @RequestBody TxSubmitRequest request) {
+        TxResponse requestError = validateSubmitRequest(request);
+        if (requestError != null) {
+            return ResponseEntity.badRequest().body(requestError);
+        }
+
         String rawTxHex = request.getRawTxHex();
         String pubKeyCompressedHex = request.getPubKeyCompressedHex();
-
-        if (rawTxHex == null || rawTxHex.isEmpty()) {
-            return ResponseEntity.badRequest().body(
-                    TxResponse.builder()
-                            .status("REJECTED")
-                            .message("Missing rawTxHex")
-                            .build()
-            );
-        }
-
-        if (pubKeyCompressedHex == null || pubKeyCompressedHex.isEmpty()) {
-            return ResponseEntity.badRequest().body(
-                    TxResponse.builder()
-                            .status("REJECTED")
-                            .message("Missing pubKeyCompressedHex")
-                            .build()
-            );
-        }
 
         log.info("[SUBMIT][{}] raw hex len: {}", network, rawTxHex.length());
 
         try {
+            TxResponse consensusResponse = nodeConsensusService.isEnabled()
+                    ? nodeConsensusService.submitWithConsensus(network, request)
+                    : null;
+            if (consensusResponse != null) {
+                if ("ACCEPTED".equals(consensusResponse.getStatus())) {
+                    return ResponseEntity.ok(consensusResponse);
+                }
+                return ResponseEntity.badRequest().body(consensusResponse);
+            }
+
             String txHash = walletService.submitTransaction(network, rawTxHex, pubKeyCompressedHex);
             return ResponseEntity.ok(TxResponse.builder()
                     .status("ACCEPTED")
@@ -124,6 +125,107 @@ public class WalletController {
                             .build()
             );
         }
+    }
+
+    @PostMapping("/{network}/node/tx/validate")
+    public ResponseEntity<TxResponse> validateNodeTransaction(
+            @PathVariable String network,
+            @RequestBody TxSubmitRequest request,
+            @RequestHeader(value = NodeConsensusService.CONSENSUS_TOKEN_HEADER, required = false) String token) {
+        if (!isConsensusTokenAllowed(token)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(
+                    TxResponse.builder()
+                            .status("REJECTED")
+                            .message("Invalid consensus token")
+                            .build()
+            );
+        }
+
+        TxResponse requestError = validateSubmitRequest(request);
+        if (requestError != null) {
+            return ResponseEntity.ok(requestError);
+        }
+
+        try {
+            String txHash = walletService.validateTransaction(network, request.getRawTxHex(), request.getPubKeyCompressedHex());
+            return ResponseEntity.ok(TxResponse.builder()
+                    .status("ACCEPTED")
+                    .txHash(txHash)
+                    .message("OK")
+                    .build());
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.ok(TxResponse.builder()
+                    .status("REJECTED")
+                    .message(e.getMessage())
+                    .build());
+        } catch (Exception e) {
+            log.error("[NODE/VALIDATE][{}] Server Error: ", network, e);
+            return ResponseEntity.ok(TxResponse.builder()
+                    .status("REJECTED")
+                    .message("Internal validation error")
+                    .build());
+        }
+    }
+
+    @PostMapping("/{network}/node/tx/execute")
+    public ResponseEntity<TxResponse> executeNodeTransaction(
+            @PathVariable String network,
+            @RequestBody TxSubmitRequest request,
+            @RequestHeader(value = NodeConsensusService.CONSENSUS_TOKEN_HEADER, required = false) String token) {
+        if (!isConsensusTokenAllowed(token)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(
+                    TxResponse.builder()
+                            .status("REJECTED")
+                            .message("Invalid consensus token")
+                            .build()
+            );
+        }
+
+        TxResponse requestError = validateSubmitRequest(request);
+        if (requestError != null) {
+            return ResponseEntity.ok(requestError);
+        }
+
+        try {
+            String txHash = walletService.executeTransaction(network, request.getRawTxHex(), request.getPubKeyCompressedHex());
+            return ResponseEntity.ok(TxResponse.builder()
+                    .status("ACCEPTED")
+                    .txHash(txHash)
+                    .message("OK")
+                    .build());
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.ok(TxResponse.builder()
+                    .status("REJECTED")
+                    .message(e.getMessage())
+                    .build());
+        } catch (Exception e) {
+            log.error("[NODE/EXECUTE][{}] Server Error: ", network, e);
+            return ResponseEntity.ok(TxResponse.builder()
+                    .status("REJECTED")
+                    .message("Internal execute error")
+                    .build());
+        }
+    }
+
+    private TxResponse validateSubmitRequest(TxSubmitRequest request) {
+        if (request == null || request.getRawTxHex() == null || request.getRawTxHex().isEmpty()) {
+            return TxResponse.builder()
+                    .status("REJECTED")
+                    .message("Missing rawTxHex")
+                    .build();
+        }
+        if (request.getPubKeyCompressedHex() == null || request.getPubKeyCompressedHex().isEmpty()) {
+            return TxResponse.builder()
+                    .status("REJECTED")
+                    .message("Missing pubKeyCompressedHex")
+                    .build();
+        }
+        return null;
+    }
+
+    private boolean isConsensusTokenAllowed(String token) {
+        String expected = consensusProperties.getSharedSecret();
+        return expected == null || expected.isBlank() || expected.equals(token);
     }
 
     @GetMapping("/{network}/tx/status")

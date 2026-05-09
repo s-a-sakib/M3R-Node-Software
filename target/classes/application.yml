@@ -43,6 +43,11 @@ app:
   broadcast-fee: 100
   percent-fee-bps: 100
   genesis-address: NQWWb4huPaqUncdJHFm2FHFjTo1qqLskuq
+  consensus:
+    enabled: false
+    timeout-ms: 2500
+    shared-secret: ""
+    peers: []
   cors-origins: 
   faucet:
     max-amount: 100000

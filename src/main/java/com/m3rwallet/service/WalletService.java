@@ -52,16 +52,9 @@ public class WalletService {
     }
 
     public Account getAccountInfo(String network, String addr) {
-        String normalizedAddr = AddressUtil.normalizeAddr(addr);
+        String normalizedAddr = AddressUtil.resolveToHex20(addr);
         if (normalizedAddr == null || normalizedAddr.isEmpty()) {
             return null;
-        }
-
-        if (normalizedAddr.length() > 30 && !normalizedAddr.matches("^[0-9a-f]+$")) {
-            String hex20 = AddressUtil.decodeBase58ToHex20(addr);
-            if (hex20 != null) {
-                normalizedAddr = hex20;
-            }
         }
 
         Account account = accountService.getAccount(network, normalizedAddr);
@@ -81,10 +74,9 @@ public class WalletService {
 
     @Transactional
     public void executeFaucet(String network, String addr, BigInteger requestedAmount) {
-        String normalizedAddr = AddressUtil.normalizeAddr(addr);
-        if (normalizedAddr != null && normalizedAddr.length() > 30 && !normalizedAddr.matches("^[0-9a-f]+$")) {
-            String h = AddressUtil.decodeBase58ToHex20(normalizedAddr);
-            if (h != null) normalizedAddr = h;
+        String normalizedAddr = AddressUtil.resolveToHex20(addr);
+        if (normalizedAddr == null || normalizedAddr.isBlank()) {
+            throw new IllegalArgumentException("Invalid address");
         }
 
         BigInteger maxAmount = BigInteger.valueOf(maxFaucetAmount);
@@ -104,42 +96,21 @@ public class WalletService {
 
     @Transactional
     public String submitTransaction(String network, String rawTxHex, String pubKeyCompressedHex) {
-        TxDecoder.ParsedTx tx = TxDecoder.parseTx(rawTxHex);
+        return executeTransaction(network, rawTxHex, pubKeyCompressedHex);
+    }
 
-        if (!tx.isValid()) {
-            throw new IllegalArgumentException("Decode failed: " + tx.getError());
-        }
+    @Transactional(readOnly = true)
+    public String validateTransaction(String network, String rawTxHex, String pubKeyCompressedHex) {
+        TxDecoder.ParsedTx tx = parseAndVerifyTransaction(rawTxHex, pubKeyCompressedHex);
+        String txHash = computeTxHash(rawTxHex);
+        validateTransactionState(network, tx, txHash);
+        return txHash;
+    }
 
-        // ---- Cryptographic verification ----
-        try {
-            byte[] pubKeyBuffer = Hex.decodeHex(pubKeyCompressedHex);
-            byte[] pubKeyHash = CryptoUtil.keccak256(pubKeyBuffer);
-            byte[] derivedFromAddrBytes = Arrays.copyOfRange(pubKeyHash, 12, 32);
-            String derivedFromAddr = Hex.encodeHexString(derivedFromAddrBytes);
-
-            if (!derivedFromAddr.equals(tx.getFromAddr20())) {
-                throw new IllegalArgumentException("Invalid public key (derived address mismatch).");
-            }
-
-            byte[] msgHashBytes = CryptoUtil.keccak256(tx.getEncodeForSigning());
-            boolean validSig = CryptoUtil.verifySignature(msgHashBytes, tx.getSignature(), pubKeyBuffer);
-
-            if (!validSig) {
-                throw new IllegalArgumentException("Digital signature verification failed.");
-            }
-        } catch (Exception e) {
-            throw new IllegalArgumentException("Cryptographic verification failed: " + e.getMessage());
-        }
-
-        // ---- Compute tx hash ----
-        String txHash;
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] hashBytes = digest.digest(Hex.decodeHex(rawTxHex));
-            txHash = Hex.encodeHexString(hashBytes);
-        } catch (Exception e) {
-            throw new RuntimeException("Hashing failed.");
-        }
+    @Transactional
+    public String executeTransaction(String network, String rawTxHex, String pubKeyCompressedHex) {
+        TxDecoder.ParsedTx tx = parseAndVerifyTransaction(rawTxHex, pubKeyCompressedHex);
+        String txHash = computeTxHash(rawTxHex);
 
         // ---- Duplicate check ----
         Transaction existingTx = transactionService.getTx(network, txHash);
@@ -163,6 +134,131 @@ public class WalletService {
 
         BigInteger currentBal = new BigInteger(fromState.getBalance());
         long now = System.currentTimeMillis();
+
+        return executeParsedTransaction(network, tx, txHash, fromState, currentBal, nonceFromUser, now);
+    }
+
+    private TxDecoder.ParsedTx parseAndVerifyTransaction(String rawTxHex, String pubKeyCompressedHex) {
+        TxDecoder.ParsedTx tx = TxDecoder.parseTx(rawTxHex);
+
+        if (!tx.isValid()) {
+            throw new IllegalArgumentException("Decode failed: " + tx.getError());
+        }
+
+        try {
+            byte[] pubKeyBuffer = Hex.decodeHex(pubKeyCompressedHex);
+            byte[] pubKeyHash = CryptoUtil.keccak256(pubKeyBuffer);
+            byte[] derivedFromAddrBytes = Arrays.copyOfRange(pubKeyHash, 12, 32);
+            String derivedFromAddr = Hex.encodeHexString(derivedFromAddrBytes);
+
+            if (!derivedFromAddr.equals(tx.getFromAddr20())) {
+                throw new IllegalArgumentException("Invalid public key (derived address mismatch).");
+            }
+
+            byte[] msgHashBytes = CryptoUtil.keccak256(tx.getEncodeForSigning());
+            boolean validSig = CryptoUtil.verifySignature(msgHashBytes, tx.getSignature(), pubKeyBuffer);
+
+            if (!validSig) {
+                throw new IllegalArgumentException("Digital signature verification failed.");
+            }
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Cryptographic verification failed: " + e.getMessage());
+        }
+
+        return tx;
+    }
+
+    private String computeTxHash(String rawTxHex) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hashBytes = digest.digest(Hex.decodeHex(rawTxHex));
+            return Hex.encodeHexString(hashBytes);
+        } catch (Exception e) {
+            throw new RuntimeException("Hashing failed.");
+        }
+    }
+
+    private void validateTransactionState(String network, TxDecoder.ParsedTx tx, String txHash) {
+        Transaction existingTx = transactionService.getTx(network, txHash);
+        if (existingTx != null) {
+            return;
+        }
+
+        Account fromState = accountService.getAccount(network, tx.getFromAddr20());
+        if (fromState == null) {
+            fromState = new Account();
+            fromState.setBalance("0");
+            fromState.setNonce(0L);
+        }
+
+        BigInteger nonceFromUser = tx.getNonce();
+        if (nonceFromUser.compareTo(BigInteger.valueOf(fromState.getNonce())) <= 0) {
+            throw new IllegalArgumentException(
+                    "Nonce too low (tx=" + nonceFromUser + ", ledger=" + fromState.getNonce() + ")");
+        }
+
+        BigInteger currentBal = new BigInteger(fromState.getBalance());
+
+        validateParsedTransactionState(network, tx, currentBal);
+    }
+
+    private void validateParsedTransactionState(String network, TxDecoder.ParsedTx tx, BigInteger currentBal) {
+        if (tx.getType() == 0 || tx.getType() == 1) {
+            BigInteger totalCost = tx.getParsedPayload().getAmount().add(tx.getFee());
+            if (currentBal.compareTo(totalCost) < 0) {
+                throw new IllegalArgumentException("Insufficient funds");
+            }
+        }
+
+        if (tx.getType() == 1) {
+            Escrow existingEscrow = escrowService.getEscrow(network, tx.getParsedPayload().getEscrowId());
+            if (existingEscrow != null) {
+                throw new IllegalArgumentException("Escrow ID exists");
+            }
+            return;
+        }
+
+        if (tx.getType() == 2 || tx.getType() == 3) {
+            String escrowId = tx.getParsedPayload().getEscrowId();
+            Escrow escrow = escrowService.getEscrow(network, escrowId);
+            if (escrow == null) {
+                throw new IllegalArgumentException("Escrow not found");
+            }
+
+            if (currentBal.compareTo(tx.getFee()) < 0) {
+                throw new IllegalArgumentException("Insufficient fee");
+            }
+
+            if (tx.getType() == 2) {
+                if (!tx.getFromAddr20().equals(escrow.getBuyer())
+                        && !tx.getFromAddr20().equals(escrow.getArbiter())) {
+                    throw new IllegalArgumentException("Unauthorized");
+                }
+                if (!tx.getParsedPayload().getToAddr().equals(escrow.getSeller())
+                        || !tx.getParsedPayload().getAmount().toString().equals(escrow.getAmount())) {
+                    throw new IllegalArgumentException("Release data mismatch");
+                }
+            } else {
+                if (!tx.getFromAddr20().equals(escrow.getSeller())
+                        && !tx.getFromAddr20().equals(escrow.getArbiter())) {
+                    throw new IllegalArgumentException("Unauthorized");
+                }
+                if (!tx.getParsedPayload().getToAddr().equals(escrow.getBuyer())
+                        || !tx.getParsedPayload().getAmount().toString().equals(escrow.getAmount())) {
+                    throw new IllegalArgumentException("Refund data mismatch");
+                }
+            }
+            return;
+        }
+
+        if (tx.getType() != 0) {
+            throw new IllegalArgumentException("Unknown TxType: " + tx.getType());
+        }
+    }
+
+    private String executeParsedTransaction(String network, TxDecoder.ParsedTx tx, String txHash,
+                                            Account fromState, BigInteger currentBal,
+                                            BigInteger nonceFromUser, long now) {
 
         // ====================================================================
         // TRANSFER (type = 0)

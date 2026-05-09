@@ -1,6 +1,7 @@
 com/m3rwallet/dto/TxResponse$TxResponseBuilder.class
 com/m3rwallet/entity/Transaction.class
 com/m3rwallet/entity/Account.class
+com/m3rwallet/util/AdminViewUtil.class
 com/m3rwallet/M3RWalletServerApplication.class
 com/m3rwallet/util/TxDecoder.class
 com/m3rwallet/dto/TxSubmitRequest$TxSubmitRequestBuilder.class
@@ -11,6 +12,7 @@ com/m3rwallet/util/TxDecoder$ParsedTx.class
 com/m3rwallet/dto/ArbiterResponse$ArbiterResponseBuilder.class
 com/m3rwallet/service/TxLedgerService.class
 com/m3rwallet/util/TxDecoder$ParsedPayload.class
+com/m3rwallet/config/ConsensusProperties.class
 com/m3rwallet/repository/AccountRepository.class
 com/m3rwallet/dto/AccountInfoResponse.class
 com/m3rwallet/dto/ArbiterResponse.class
@@ -39,6 +41,7 @@ com/m3rwallet/dto/HealthResponse.class
 com/m3rwallet/entity/Escrow.class
 com/m3rwallet/util/CryptoUtil.class
 com/m3rwallet/dto/TxHistoryResponse.class
+com/m3rwallet/service/NodeConsensusService.class
 com/m3rwallet/dto/TxSubmitRequest.class
 com/m3rwallet/dto/TxHistoryResponse$TxHistoryResponseBuilder.class
 com/m3rwallet/service/EscrowService.class

@@ -144,7 +144,9 @@
             <select id="networkSelect" th:value="${network}">
                 <option th:each="net : ${networks}" th:value="${net}" th:text="${net}" th:selected="${net == network}"></option>
             </select>
-            <button onclick="window.location = '/admin/accounts?network=' + document.getElementById('networkSelect').value">Filter</button>
+            <input id="searchInput" type="search" placeholder="Search address, balance, nonce" th:value="${q}">
+            <button onclick="window.location = '/admin/accounts?network=' + document.getElementById('networkSelect').value + '&q=' + encodeURIComponent(document.getElementById('searchInput').value)">Search</button>
+            <button onclick="window.location = '/admin/accounts?network=' + document.getElementById('networkSelect').value">Clear</button>
         </div>
 
         <div class="table-container">
@@ -165,8 +167,8 @@
                 </thead>
                 <tbody>
                     <tr th:each="acc : ${accounts}">
-                        <td class="address" th:text="${acc.address}"></td>
-                        <td th:text="${acc.balance}"></td>
+                        <td class="address" th:text="${@adminView.address(acc.address)}"></td>
+                        <td th:text="${@adminView.amount(acc.balance)}"></td>
                         <td th:text="${acc.nonce}"></td>
                         <td th:text="${acc.network}"></td>
                     </tr>

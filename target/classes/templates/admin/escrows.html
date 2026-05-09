@@ -65,7 +65,7 @@
             margin-bottom: 20px;
         }
 
-        .controls select, .controls button {
+        .controls select, .controls input, .controls button {
             padding: 10px;
             border: 1px solid #ddd;
             border-radius: 5px;
@@ -149,7 +149,9 @@
             <select id="networkSelect" th:value="${network}">
                 <option th:each="net : ${networks}" th:value="${net}" th:text="${net}" th:selected="${net == network}"></option>
             </select>
-            <button onclick="window.location = '/admin/escrows?network=' + document.getElementById('networkSelect').value">Filter</button>
+            <input id="searchInput" type="search" placeholder="Search escrow, address, amount" th:value="${q}">
+            <button onclick="window.location = '/admin/escrows?network=' + document.getElementById('networkSelect').value + '&q=' + encodeURIComponent(document.getElementById('searchInput').value)">Search</button>
+            <button onclick="window.location = '/admin/escrows?network=' + document.getElementById('networkSelect').value">Clear</button>
         </div>
 
         <div class="table-container">
@@ -174,10 +176,10 @@
                 <tbody>
                     <tr th:each="escrow : ${escrows}">
                         <td class="address" th:text="${escrow.escrowId}"></td>
-                        <td class="address" th:text="${escrow.buyer}"></td>
-                        <td class="address" th:text="${escrow.seller}"></td>
-                        <td class="address" th:text="${escrow.arbiter}"></td>
-                        <td th:text="${escrow.amount}"></td>
+                        <td class="address" th:text="${@adminView.address(escrow.buyer)}"></td>
+                        <td class="address" th:text="${@adminView.address(escrow.seller)}"></td>
+                        <td class="address" th:text="${@adminView.address(escrow.arbiter)}"></td>
+                        <td th:text="${@adminView.amount(escrow.amount)}"></td>
                         <td th:text="${escrow.network}"></td>
                         <td class="timestamp" th:text="${#dates.format(new java.util.Date(escrow.createdAt), 'yyyy-MM-dd HH:mm:ss')}"></td>
                     </tr>

@@ -15,6 +15,7 @@
 /home/noob_coder/Desktop/M3R_Coin/Node_Software/src/main/java/com/m3rwallet/dto/FaucetResponse.java
 /home/noob_coder/Desktop/M3R_Coin/Node_Software/src/main/java/com/m3rwallet/controller/WalletController.java
 /home/noob_coder/Desktop/M3R_Coin/Node_Software/src/main/java/com/m3rwallet/config/WebMvcConfig.java
+/home/noob_coder/Desktop/M3R_Coin/Node_Software/src/main/java/com/m3rwallet/config/ConsensusProperties.java
 /home/noob_coder/Desktop/M3R_Coin/Node_Software/src/main/java/com/m3rwallet/util/CryptoUtil.java
 /home/noob_coder/Desktop/M3R_Coin/Node_Software/src/main/java/com/m3rwallet/M3RWalletServerApplication.java
 /home/noob_coder/Desktop/M3R_Coin/Node_Software/src/main/java/com/m3rwallet/service/EscrowService.java
@@ -28,4 +29,6 @@
 /home/noob_coder/Desktop/M3R_Coin/Node_Software/src/main/java/com/m3rwallet/entity/Escrow.java
 /home/noob_coder/Desktop/M3R_Coin/Node_Software/src/main/java/com/m3rwallet/entity/Account.java
 /home/noob_coder/Desktop/M3R_Coin/Node_Software/src/main/java/com/m3rwallet/util/TxDecoder.java
+/home/noob_coder/Desktop/M3R_Coin/Node_Software/src/main/java/com/m3rwallet/util/AdminViewUtil.java
+/home/noob_coder/Desktop/M3R_Coin/Node_Software/src/main/java/com/m3rwallet/service/NodeConsensusService.java
 /home/noob_coder/Desktop/M3R_Coin/Node_Software/src/main/java/com/m3rwallet/repository/TxLedgerRepository.java
