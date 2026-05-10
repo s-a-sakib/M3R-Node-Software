@@ -4,7 +4,7 @@ spring:
   datasource:
     url: jdbc:mysql://localhost:3306/m3rwallet_db?allowPublicKeyRetrieval=true&useSSL=false&serverTimezone=UTC
     username: root
-    password: 20027323606000043
+    password: {$DB_PASSWORD}
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
       connection-timeout: 30000
