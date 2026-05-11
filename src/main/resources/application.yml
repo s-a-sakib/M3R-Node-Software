@@ -55,3 +55,24 @@ app:
   rate-limit:
     global-requests-per-minute: 100
     tx-submit-per-minute: 20
+
+# Validator and fee policy additions (Day 2)
+  validator:
+    enabled: true
+    address: ""
+    minimum-stake: 1000
+    slot-duration-ms: 15000
+    unbonding-period-blocks: 100
+    reputation-decay-rate: 0.999
+    initial-reputation: 0.0
+
+  fee-policy:
+    broadcast-fee-bps: 2000
+    consensus-fee-bps: 8000
+    base-fee: 100
+    per-byte-fee: 1
+
+  blockchain:
+    network: mainnet
+    max-block-size: 5000
+    finality-confirmations: 2
