@@ -3,6 +3,7 @@ package com.m3rwallet.repository;
 import com.m3rwallet.entity.Block;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Optional;
@@ -19,4 +20,13 @@ public interface BlockRepository extends JpaRepository<Block, Long> {
 
     @Override
     Optional<Block> findById(Long blockHeight);
+
+    @Transactional(readOnly = true)
+    Optional<Block> findTopByOrderByBlockHeightDesc();
+
+    @Transactional(readOnly = true)
+    List<Block> findByIsFinalized(Boolean isFinalized);
+
+    @Transactional(readOnly = true)
+    long countByIsFinalized(Boolean isFinalized);
 }
