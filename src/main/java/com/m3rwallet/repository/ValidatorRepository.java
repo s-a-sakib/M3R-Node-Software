@@ -13,4 +13,5 @@ public interface ValidatorRepository extends JpaRepository<Validator, Long> {
     Optional<Validator> findByAddressAndNetwork(String address, String network);
     List<Validator> findByNetworkAndStatus(String network, ValidatorStatus status);
     List<Validator> findByNetwork(String network);
+    List<Validator> findByStatus(ValidatorStatus status);
 }

@@ -11,5 +11,6 @@ import java.util.Optional;
 public interface ValidatorWeightRepository extends JpaRepository<ValidatorWeight, Long> {
     Optional<ValidatorWeight> findByValidatorAddressAndNetworkAndIsStale(String address, String network, Boolean isStale);
     List<ValidatorWeight> findByNetworkAndIsStale(String network, Boolean isStale);
+    List<ValidatorWeight> findByValidatorAddressAndNetwork(String address, String network);
     void deleteByValidatorAddressAndNetwork(String address, String network);
 }

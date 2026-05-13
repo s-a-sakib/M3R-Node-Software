@@ -55,7 +55,9 @@ public class BlockProposalService {
         block.setProposerAddress(proposer.getAddress());
         block.setProposerWeight(validatorService.calculateWeight(proposer));
 
-        var lastOpt = blockRepository.findTopByOrderByBlockHeightDesc();
+        var lastOpt = blockRepository.findTopByNetworkOrderByBlockHeightDesc(network);
+
+        block.setNetwork(network);
         if (lastOpt != null && lastOpt.isPresent()) {
             Block last = lastOpt.get();
             block.setBlockHeight(last.getBlockHeight() + 1);

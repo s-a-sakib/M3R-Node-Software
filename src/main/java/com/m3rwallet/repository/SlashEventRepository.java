@@ -10,5 +10,6 @@ import java.util.List;
 public interface SlashEventRepository extends JpaRepository<SlashEvent, Long> {
     List<SlashEvent> findByValidatorAddress(String validatorAddress);
     List<SlashEvent> findByValidatorAddressAndNetwork(String address, String network);
+    List<SlashEvent> findByValidatorAddressAndNetworkOrderByCreatedAtDesc(String validatorAddress, String network);
     List<SlashEvent> findByBlockHeight(Long blockHeight);
 }

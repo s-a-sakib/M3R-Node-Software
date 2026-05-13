@@ -52,6 +52,9 @@ public class Block {
     @Column(name = "version", nullable = false)
     private Byte version = 1;
 
+    @Column(length = 20, nullable = false)
+    private String network = "mainnet";
+
     /** Wall-clock timestamp in milliseconds (Unix ms). */
     @Column(name = "timestamp", nullable = false)
     private Long timestamp;

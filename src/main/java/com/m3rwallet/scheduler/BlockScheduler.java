@@ -4,6 +4,7 @@ import com.m3rwallet.entity.Block;
 import com.m3rwallet.entity.BlockTransaction;
 import com.m3rwallet.entity.Validator;
 import com.m3rwallet.service.BlockProposalService;
+import com.m3rwallet.service.SlashDetectionService;
 import com.m3rwallet.service.FeeDistributionService;
 import com.m3rwallet.service.MempoolService;
 import com.m3rwallet.service.ValidatorService;
@@ -24,6 +25,7 @@ public class BlockScheduler {
 
     private final ValidatorService validatorService;
     private final BlockProposalService blockProposalService;
+    private final SlashDetectionService slashDetectionService;
     private final MempoolService mempoolService;
     private final FeeDistributionService feeDistributionService;
     private final boolean validatorEnabled;
@@ -39,6 +41,7 @@ public class BlockScheduler {
                           BlockProposalService blockProposalService,
                           MempoolService mempoolService,
                           FeeDistributionService feeDistributionService,
+                          SlashDetectionService slashDetectionService,
                           @Value("${app.validator.enabled:false}") boolean validatorEnabled,
                           @Value("${app.validator.address:}") String thisNodeAddress,
                           @Value("${app.blockchain.network:mainnet}") String network,
@@ -48,6 +51,7 @@ public class BlockScheduler {
         this.blockProposalService = blockProposalService;
         this.mempoolService = mempoolService;
         this.feeDistributionService = feeDistributionService;
+        this.slashDetectionService = slashDetectionService;
         this.validatorEnabled = validatorEnabled;
         this.thisNodeAddress = thisNodeAddress;
         this.network = network;
@@ -71,6 +75,17 @@ public class BlockScheduler {
                 log.info("[SLOT {}] Not our turn. Skipping.", slotNumber);
                 return;
             }
+            // check double sign for this node before building
+            boolean isDoubleSign = false;
+            try {
+                isDoubleSign = slashDetectionService.detectDoubleSign(thisNodeAddress, slotNumber, "PENDING", network);
+            } catch (Exception e) {
+                log.warn("Double sign detection failed: {}", e.getMessage());
+            }
+            if (isDoubleSign) {
+                log.warn("[SLOT {}] Double sign detected for this node! Skipping.", slotNumber);
+                return;
+            }
             log.info("[SLOT {}] *** THIS NODE IS PROPOSER ***", slotNumber);
 
             List<MempoolService.PendingTx> pending = mempoolService.getPendingTransactions(network, maxBlockSize);
@@ -86,6 +101,16 @@ public class BlockScheduler {
             mempoolService.removeTransactions(pending.stream().map(MempoolService.PendingTx::txHash).collect(Collectors.toList()));
             lastProposedSlot.set(slotNumber);
             log.info("[SLOT {}] Block {} proposed and finalized. Hash: {}", slotNumber, finalized.getBlockHeight(), finalized.getBlockHash());
+
+            List<String> violations = new java.util.ArrayList<>();
+            try {
+                violations = slashDetectionService.detectInvalidProposal(finalized);
+            } catch (Exception e) {
+                log.warn("Invalid proposal detection failed: {}", e.getMessage());
+            }
+            if (violations != null && !violations.isEmpty()) {
+                log.warn("[SLOT {}] Block has violations: {}", slotNumber, violations);
+            }
         } catch (Exception e) {
             log.error("[SLOT {}] Block proposal FAILED: {}", slotNumber, e.getMessage(), e);
         } finally {

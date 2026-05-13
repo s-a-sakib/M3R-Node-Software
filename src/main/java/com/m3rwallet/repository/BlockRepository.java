@@ -25,8 +25,23 @@ public interface BlockRepository extends JpaRepository<Block, Long> {
     Optional<Block> findTopByOrderByBlockHeightDesc();
 
     @Transactional(readOnly = true)
+    Optional<Block> findTopByNetworkOrderByBlockHeightDesc(String network);
+
+    @Transactional(readOnly = true)
+    List<Block> findByNetworkAndIsFinalized(String network, Boolean isFinalized);
+
+    @Transactional(readOnly = true)
+    Optional<Block> findByBlockHashAndNetwork(String blockHash, String network);
+
+    @Transactional(readOnly = true)
+    long countByNetworkAndIsFinalized(String network, Boolean isFinalized);
+
+    @Transactional(readOnly = true)
     List<Block> findByIsFinalized(Boolean isFinalized);
 
     @Transactional(readOnly = true)
     long countByIsFinalized(Boolean isFinalized);
+
+    @Transactional(readOnly = true)
+    Optional<Block> findBySlotNumberAndProposerAddressAndNetwork(Long slotNumber, String proposerAddress, String network);
 }
