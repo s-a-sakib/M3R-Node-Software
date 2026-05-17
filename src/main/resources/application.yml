@@ -4,7 +4,7 @@ spring:
   datasource:
     url: jdbc:mysql://localhost:3306/m3rwallet_db?allowPublicKeyRetrieval=true&useSSL=false&serverTimezone=UTC
     username: root
-    password: {$DB_PASSWORD}
+    password: ${DB_PASSWORD:rootpass}
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
       connection-timeout: 30000
@@ -76,3 +76,7 @@ app:
     network: mainnet
     max-block-size: 5000
     finality-confirmations: 2
+
+  node:
+    self-url: ${NODE_SELF_URL:http://localhost:3000}
+    bootstrap-peers: ${NODE_BOOTSTRAP_PEERS:}

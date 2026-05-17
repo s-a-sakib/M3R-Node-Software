@@ -5,6 +5,7 @@ import com.m3rwallet.entity.BlockTransaction;
 import com.m3rwallet.entity.Validator;
 import com.m3rwallet.service.BlockProposalService;
 import com.m3rwallet.service.SlashDetectionService;
+import com.m3rwallet.service.PeerSyncService;
 import com.m3rwallet.service.FeeDistributionService;
 import com.m3rwallet.service.MempoolService;
 import com.m3rwallet.service.ValidatorService;
@@ -18,6 +19,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
+import jakarta.annotation.PostConstruct;
 
 @Component
 public class BlockScheduler {
@@ -26,6 +28,7 @@ public class BlockScheduler {
     private final ValidatorService validatorService;
     private final BlockProposalService blockProposalService;
     private final SlashDetectionService slashDetectionService;
+    private final PeerSyncService peerSyncService;
     private final MempoolService mempoolService;
     private final FeeDistributionService feeDistributionService;
     private final boolean validatorEnabled;
@@ -42,6 +45,7 @@ public class BlockScheduler {
                           MempoolService mempoolService,
                           FeeDistributionService feeDistributionService,
                           SlashDetectionService slashDetectionService,
+                          PeerSyncService peerSyncService,
                           @Value("${app.validator.enabled:false}") boolean validatorEnabled,
                           @Value("${app.validator.address:}") String thisNodeAddress,
                           @Value("${app.blockchain.network:mainnet}") String network,
@@ -52,11 +56,22 @@ public class BlockScheduler {
         this.mempoolService = mempoolService;
         this.feeDistributionService = feeDistributionService;
         this.slashDetectionService = slashDetectionService;
+        this.peerSyncService = peerSyncService;
         this.validatorEnabled = validatorEnabled;
         this.thisNodeAddress = thisNodeAddress;
         this.network = network;
         this.slotDurationMs = slotDurationMs;
         this.maxBlockSize = maxBlockSize;
+    }
+
+    @PostConstruct
+    public void startupSync() {
+        try {
+            peerSyncService.syncMissingBlocks();
+            log.info("Peer sync missing blocks executed on startup");
+        } catch (Exception e) {
+            log.warn("Startup syncMissingBlocks failed: {}", e.getMessage());
+        }
     }
 
     @Scheduled(fixedDelayString = "${app.validator.slot-duration-ms:15000}")
@@ -97,6 +112,13 @@ public class BlockScheduler {
             Block finalized = blockProposalService.finalizeBlock(saved, network);
             // TODO Day 6: Replace immediate finalize with weighted consensus
             feeDistributionService.distributeConsensusFees(finalized, network);
+
+            try {
+                peerSyncService.broadcastBlock(finalized);
+                log.info("[SLOT {}] Block {} broadcast to peers", slotNumber, finalized.getBlockHeight());
+            } catch (Exception e) {
+                log.warn("Failed to broadcast block {}: {}", finalized.getBlockHeight(), e.getMessage());
+            }
 
             mempoolService.removeTransactions(pending.stream().map(MempoolService.PendingTx::txHash).collect(Collectors.toList()));
             lastProposedSlot.set(slotNumber);
