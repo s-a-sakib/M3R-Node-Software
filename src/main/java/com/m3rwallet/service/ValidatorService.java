@@ -195,6 +195,9 @@ public class ValidatorService {
                 .network(network)
                 .stakedAmount(stakeAmount)
                 .reliabilityScoreScaled(0L)
+                .totalProposals(0L)
+                .successfulProposals(0L)
+                .corruptedProposals(0L)
                 .status(Validator.ValidatorStatus.ACTIVE)
                 .registeredAt(System.currentTimeMillis())
                 .build();

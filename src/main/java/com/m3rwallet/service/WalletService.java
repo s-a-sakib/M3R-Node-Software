@@ -8,6 +8,7 @@ import com.m3rwallet.util.CryptoUtil;
 import com.m3rwallet.util.TxDecoder;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.apache.commons.codec.binary.Hex;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -26,6 +27,15 @@ public class WalletService {
     private final EscrowService escrowService;
     private final TxLedgerService txLedgerService;
 
+    @Value("${app.validator.address:}")
+    private String thisNodeAddress;
+
+    @Autowired(required = false)
+    private MempoolService mempoolService;
+
+    @Autowired(required = false)
+    private FeeDistributionService feeDistributionService;
+
     @Value("${app.broadcast-fee:100}")
     private long broadcastFee;
 
@@ -37,6 +47,13 @@ public class WalletService {
 
     @Value("${app.genesis-address}")
     private String genesisAddress;
+
+    private String getThisNodeAddress() {
+        return (thisNodeAddress != null
+                && !thisNodeAddress.isBlank())
+                ? thisNodeAddress
+                : "unknown-node";
+    }
 
     @Transactional
     public void initializeNetworks() {
@@ -135,7 +152,78 @@ public class WalletService {
         BigInteger currentBal = new BigInteger(fromState.getBalance());
         long now = System.currentTimeMillis();
 
-        return executeParsedTransaction(network, tx, txHash, fromState, currentBal, nonceFromUser, now);
+        String senderAddress = tx.getFromAddr20();
+        String recipientAddress = tx.getParsedPayload() != null ? tx.getParsedPayload().getToAddr() : null;
+        if (recipientAddress == null && tx.getParsedPayload() != null) {
+            recipientAddress = tx.getParsedPayload().getSeller();
+        }
+        BigInteger amount = tx.getParsedPayload() != null && tx.getParsedPayload().getAmount() != null
+                ? tx.getParsedPayload().getAmount()
+                : BigInteger.ZERO;
+
+        // === BLOCKCHAIN: Calculate fees ===
+        long broadcastFee = 0L;
+        long consensusFee = 0L;
+        long totalFee = 0L;
+        try {
+            if (feeDistributionService != null) {
+                int txSizeBytes = rawTxHex.length() / 2;
+                var fees = feeDistributionService
+                        .calculateFees(txSizeBytes);
+                broadcastFee = fees.broadcastFee();
+                consensusFee = fees.consensusFee();
+                totalFee     = fees.totalFee();
+                log.debug("Fees: total={} broadcast={} consensus={}",
+                        totalFee, broadcastFee, consensusFee);
+            }
+        } catch (Exception e) {
+            log.warn("Fee calc error (non-fatal): {}", e.getMessage());
+        }
+        // === END BLOCKCHAIN ===
+
+        String executedTxHash = executeParsedTransaction(network, tx, txHash, fromState, currentBal, nonceFromUser, now);
+
+        // === BLOCKCHAIN: Add to mempool + record broadcast fee ===
+        try {
+            if (mempoolService != null) {
+                String broadcaster = getThisNodeAddress();
+
+                MempoolService.PendingTx pendingTx =
+                        new MempoolService.PendingTx(
+                                txHash,               // String txHash
+                                senderAddress,        // String senderAddress
+                                recipientAddress,     // String recipientAddress
+                                amount.toString(),    // String value (BigInteger -> String)
+                                totalFee,             // long fee
+                                broadcastFee,         // long broadcastFee
+                                consensusFee,         // long consensusFee
+                                broadcaster,          // String broadcasterAddress
+                                network,              // String network
+                                System.currentTimeMillis(), // long receivedAt
+                                rawTxHex              // String rawTxHex
+                        );
+
+                boolean added = mempoolService.addTransaction(pendingTx);
+                log.debug("Tx {} {} mempool",
+                        txHash, added ? "added to" : "already in");
+
+                if (feeDistributionService != null && broadcastFee > 0) {
+                    feeDistributionService.recordBroadcastFee(
+                            txHash,
+                            broadcaster,
+                            network,
+                            broadcastFee,
+                            null   // blockHeight not known yet
+                    );
+                }
+            }
+        } catch (Exception e) {
+            // MUST NOT affect tx result
+            log.warn("Mempool/fee error (non-fatal): {}", e.getMessage());
+        }
+        // === END BLOCKCHAIN ===
+
+        return executedTxHash;
     }
 
     private TxDecoder.ParsedTx parseAndVerifyTransaction(String rawTxHex, String pubKeyCompressedHex) {
