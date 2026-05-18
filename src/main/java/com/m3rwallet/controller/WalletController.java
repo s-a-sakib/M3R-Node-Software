@@ -10,6 +10,7 @@ import com.m3rwallet.config.ConsensusProperties;
 import com.m3rwallet.repository.BlockRepository;
 import com.m3rwallet.repository.BlockTransactionRepository;
 import com.m3rwallet.repository.ValidatorRepository;
+import com.m3rwallet.service.BlockBroadcastService;
 import com.m3rwallet.service.FeeDistributionService;
 import com.m3rwallet.service.MempoolService;
 import com.m3rwallet.service.NodeConsensusService;
@@ -19,6 +20,7 @@ import com.m3rwallet.service.WalletService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -60,6 +62,12 @@ public class WalletController {
 
     @Autowired(required = false)
     private FeeDistributionService feeDistributionService;
+
+    @Autowired(required = false)
+    private BlockBroadcastService blockBroadcastService;
+
+    @Value("${app.validator.address:}")
+    private String thisNodeAddress;
 
     /**
      * Factory method to create network-specific routers
@@ -187,6 +195,7 @@ public class WalletController {
             return ResponseEntity.ok(TxResponse.builder()
                     .status("ACCEPTED")
                     .txHash(txHash)
+                    .validatorAddress(thisNodeAddress)
                     .message("OK")
                     .build());
         } catch (IllegalArgumentException e) {
@@ -519,6 +528,24 @@ public class WalletController {
 
             return ResponseEntity.ok(result);
         } catch (Exception e) {
+            return ResponseEntity.internalServerError()
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/{network}/blocks/receive")
+    @ResponseBody
+    public ResponseEntity<?> receiveBlock(
+            @PathVariable String network,
+            @RequestBody Map<String, Object> payload) {
+        try {
+            if (blockBroadcastService == null) {
+                return ResponseEntity.ok(Map.of("status", "DISABLED"));
+            }
+            Map<String, Object> result = blockBroadcastService.receiveBlock(payload, network);
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            log.error("Error receiving block: {}", e.getMessage());
             return ResponseEntity.internalServerError()
                     .body(Map.of("error", e.getMessage()));
         }

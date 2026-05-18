@@ -3,8 +3,12 @@ package com.m3rwallet.service;
 import com.m3rwallet.config.ConsensusProperties;
 import com.m3rwallet.dto.TxResponse;
 import com.m3rwallet.dto.TxSubmitRequest;
+import com.m3rwallet.entity.Validator;
+import com.m3rwallet.repository.ValidatorRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
@@ -24,6 +28,18 @@ public class NodeConsensusService {
     private final WalletService walletService;
     private final RestTemplate restTemplate;
     private final ConsensusProperties consensusProperties;
+
+    @Autowired(required = false)
+    private ValidatorService validatorService;
+
+    @Autowired(required = false)
+    private ValidatorRepository validatorRepository;
+
+    @Value("${app.blockchain.network:mainnet}")
+    private String defaultNetwork;
+
+    @Value("${app.validator.address:}")
+    private String thisNodeAddress;
 
     public boolean isEnabled() {
         return consensusProperties.isEnabled() && !normalizedPeers().isEmpty();
@@ -51,6 +67,8 @@ public class NodeConsensusService {
         }
 
         int yesVotes = 1;
+        List<String> yesVoterAddresses = new ArrayList<>();
+        yesVoterAddresses.add(thisNodeAddress);
         List<String> rejections = new ArrayList<>();
         List<String> unavailable = new ArrayList<>();
 
@@ -59,6 +77,7 @@ public class NodeConsensusService {
                 TxResponse response = post(peer, network, "validate", request);
                 if (response != null && "ACCEPTED".equals(response.getStatus())) {
                     yesVotes++;
+                    yesVoterAddresses.add(response.getValidatorAddress());
                 } else {
                     String reason = response != null ? response.getMessage() : "empty response";
                     rejections.add(peer + ": " + reason);
@@ -69,12 +88,39 @@ public class NodeConsensusService {
             }
         }
 
-        if (yesVotes < quorum) {
+        double totalWeight = getTotalNetworkWeight(totalNodes, network);
+        double approvedWeight = getApprovedWeight(yesVoterAddresses, network);
+        double weightRatio = totalWeight > 0.0d ? approvedWeight / totalWeight : 0.0d;
+        boolean weightedAvailable = hasActiveValidators(network);
+        boolean weightedConsensus = weightedAvailable && weightRatio >= (2.0d / 3.0d);
+        boolean countConsensus = yesVotes >= quorum;
+        String consensusType = weightedConsensus ? "WEIGHTED" : "COUNT_FALLBACK";
+
+        log.info("[CONSENSUS][{}] approvedWeight={}/{} ({}%) votes={}/{} quorum={} consensusType={} weightedAvailable={}",
+                network,
+                String.format("%.4f", approvedWeight),
+                String.format("%.4f", totalWeight),
+                String.format("%.1f", weightRatio * 100.0d),
+                yesVotes,
+                totalNodes,
+                quorum,
+                consensusType,
+                weightedAvailable);
+
+        if (!weightedConsensus && !countConsensus) {
             return TxResponse.builder()
                     .status("REJECTED")
                     .txHash(txHash)
+                    .yesVotes(yesVotes)
+                    .totalPeers(totalNodes)
+                    .approvedWeight(approvedWeight)
+                    .totalWeight(totalWeight)
+                    .weightRatio(weightRatio)
+                    .consensusType(consensusType)
                     .message("Consensus rejected: yesVotes=" + yesVotes + "/" + totalNodes
                             + ", quorum=" + quorum
+                            + ", approvedWeight=" + String.format("%.4f", approvedWeight) + "/" + String.format("%.4f", totalWeight)
+                            + ", weightRatio=" + String.format("%.4f", weightRatio)
                             + summarizeFailures(rejections, unavailable))
                     .build();
         }
@@ -99,8 +145,16 @@ public class NodeConsensusService {
             return TxResponse.builder()
                     .status("ACCEPTED")
                     .txHash(executedHash)
+                    .yesVotes(yesVotes)
+                    .totalPeers(totalNodes)
+                    .approvedWeight(approvedWeight)
+                    .totalWeight(totalWeight)
+                    .weightRatio(weightRatio)
+                    .consensusType(consensusType)
                     .message("Consensus accepted: yesVotes=" + yesVotes + "/" + totalNodes
                             + ", quorum=" + quorum
+                            + ", approvedWeight=" + String.format("%.4f", approvedWeight) + "/" + String.format("%.4f", totalWeight)
+                            + ", weightRatio=" + String.format("%.4f", weightRatio)
                             + (executeFailures > 0 ? ", peerExecuteFailures=" + executeFailures : ""))
                     .build();
         } catch (IllegalArgumentException e) {
@@ -138,6 +192,83 @@ public class NodeConsensusService {
 
     private int quorum(int totalNodes) {
         return (2 * totalNodes + 2) / 3;
+    }
+
+    /**
+     * Returns W_v weight for a validator.
+     * Falls back to 1.0 (equal weight) if validator not found.
+     */
+    private double getVoteWeight(String voterAddress, String network) {
+        try {
+            if (validatorService == null
+                    || validatorRepository == null
+                    || voterAddress == null
+                    || voterAddress.isBlank()) {
+                return 1.0d;
+            }
+            String effectiveNetwork = (network == null || network.isBlank()) ? defaultNetwork : network;
+            return validatorRepository
+                    .findByAddressAndNetwork(voterAddress, effectiveNetwork)
+                    .map(v -> validatorService.calculateWeight(v))
+                    .orElse(1.0d);
+        } catch (Exception e) {
+            log.warn("Could not get weight for {}: {}", voterAddress, e.getMessage());
+            return 1.0d;
+        }
+    }
+
+    /**
+     * Sum of W_v for all ACTIVE validators on this network.
+     * Falls back to peerCount if validator system unavailable.
+     */
+    private double getTotalNetworkWeight(int peerCount, String network) {
+        try {
+            if (validatorService == null || validatorRepository == null) {
+                return peerCount;
+            }
+            String effectiveNetwork = (network == null || network.isBlank()) ? defaultNetwork : network;
+            List<Validator> active = validatorRepository
+                    .findByNetworkAndStatus(effectiveNetwork, Validator.ValidatorStatus.ACTIVE);
+            if (active == null || active.isEmpty()) {
+                return peerCount;
+            }
+            double total = active.stream()
+                    .mapToDouble(v -> validatorService.calculateWeight(v))
+                    .sum();
+            return total > 0.0d ? total : peerCount;
+        } catch (Exception e) {
+            log.warn("Could not get total weight: {}", e.getMessage());
+            return peerCount;
+        }
+    }
+
+    private double getApprovedWeight(List<String> yesVoterAddresses, String network) {
+        try {
+            if (yesVoterAddresses == null || yesVoterAddresses.isEmpty()) {
+                return 0.0d;
+            }
+            return yesVoterAddresses.stream()
+                    .mapToDouble(address -> getVoteWeight(address, network))
+                    .sum();
+        } catch (Exception e) {
+            log.warn("Could not get approved weight: {}", e.getMessage());
+            return yesVoterAddresses == null ? 0.0d : yesVoterAddresses.size();
+        }
+    }
+
+    private boolean hasActiveValidators(String network) {
+        try {
+            if (validatorRepository == null) {
+                return false;
+            }
+            String effectiveNetwork = (network == null || network.isBlank()) ? defaultNetwork : network;
+            List<Validator> active = validatorRepository
+                    .findByNetworkAndStatus(effectiveNetwork, Validator.ValidatorStatus.ACTIVE);
+            return active != null && !active.isEmpty();
+        } catch (Exception e) {
+            log.warn("Could not check active validators: {}", e.getMessage());
+            return false;
+        }
     }
 
     private String summarizeFailures(List<String> rejections, List<String> unavailable) {

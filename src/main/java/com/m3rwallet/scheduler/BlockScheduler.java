@@ -3,6 +3,7 @@ package com.m3rwallet.scheduler;
 import com.m3rwallet.entity.Block;
 import com.m3rwallet.entity.BlockTransaction;
 import com.m3rwallet.entity.Validator;
+import com.m3rwallet.service.BlockBroadcastService;
 import com.m3rwallet.service.BlockProposalService;
 import com.m3rwallet.service.SlashDetectionService;
 import com.m3rwallet.service.PeerSyncService;
@@ -11,6 +12,7 @@ import com.m3rwallet.service.MempoolService;
 import com.m3rwallet.service.ValidatorService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -39,6 +41,9 @@ public class BlockScheduler {
 
     private final AtomicBoolean isProposing = new AtomicBoolean(false);
     private final AtomicLong lastProposedSlot = new AtomicLong(-1L);
+
+    @Autowired(required = false)
+    private BlockBroadcastService blockBroadcastService;
 
     public BlockScheduler(ValidatorService validatorService,
                           BlockProposalService blockProposalService,
@@ -110,6 +115,16 @@ public class BlockScheduler {
             List<BlockTransaction> txs = blockProposalService.createBlockTransactions(pending, block);
             Block saved = blockProposalService.saveBlock(block, txs);
             Block finalized = blockProposalService.finalizeBlock(saved, network);
+            // === BLOCK BROADCAST TO CONSENSUS PEERS ===
+            try {
+                if (blockBroadcastService != null) {
+                    blockBroadcastService.broadcastBlock(finalized, network);
+                }
+            } catch (Exception e) {
+                log.warn("[SLOT {}] Block broadcast failed (non-fatal): {}",
+                        slotNumber, e.getMessage());
+            }
+            // === END BLOCK BROADCAST ===
             // TODO Day 6: Replace immediate finalize with weighted consensus
             feeDistributionService.distributeConsensusFees(finalized, network);
 
