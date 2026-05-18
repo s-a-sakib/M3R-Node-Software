@@ -1,36 +1,45 @@
 package com.m3rwallet.controller;
 
 import com.m3rwallet.entity.Account;
-import com.m3rwallet.entity.Transaction;
+import com.m3rwallet.entity.Block;
 import com.m3rwallet.entity.Escrow;
+import com.m3rwallet.entity.Transaction;
+import com.m3rwallet.entity.Validator;
+import com.m3rwallet.repository.BlockRepository;
+import com.m3rwallet.repository.ValidatorRepository;
 import com.m3rwallet.service.AccountService;
-import com.m3rwallet.service.TransactionService;
 import com.m3rwallet.service.EscrowService;
+import com.m3rwallet.service.TransactionService;
+import com.m3rwallet.service.ValidatorService;
 import com.m3rwallet.util.AddressUtil;
 import com.m3rwallet.util.AdminViewUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.List;
-import java.util.Map;
-import java.util.HashMap;
+import java.util.*;
+import java.util.stream.Collectors;
 
 @Controller
 @RequestMapping("/admin")
 @RequiredArgsConstructor
 @Slf4j
 public class AdminDashboardController {
+
     private final AccountService accountService;
     private final TransactionService transactionService;
     private final EscrowService escrowService;
     private final AdminViewUtil adminViewUtil;
 
+    private final BlockRepository blockRepo;
+    private final ValidatorRepository validatorRepo;
+    private final ValidatorService validatorService;
+
     @GetMapping("")
     public String dashboard(Model model) {
-        // Add statistics to model
         Map<String, Object> stats = new HashMap<>();
         stats.put("mainnetAccounts", accountService.getNetworkAccountCount("mainnet"));
         stats.put("testnetAccounts", accountService.getNetworkAccountCount("testnet"));
@@ -41,7 +50,7 @@ public class AdminDashboardController {
         stats.put("mainnetEscrows", escrowService.getNetworkEscrowCount("mainnet"));
         stats.put("testnetEscrows", escrowService.getNetworkEscrowCount("testnet"));
         stats.put("legacyEscrows", escrowService.getNetworkEscrowCount("legacy"));
-        
+
         model.addAttribute("stats", stats);
         return "admin/dashboard";
     }
@@ -88,6 +97,20 @@ public class AdminDashboardController {
         return "admin/escrows";
     }
 
+    @GetMapping("/blocks")
+    public String blocks(@RequestParam(required = false, defaultValue = "mainnet") String network,
+                         Model model) {
+        model.addAttribute("network", network);
+        return "admin/blocks";
+    }
+
+    @GetMapping("/validators")
+    public String validators(@RequestParam(required = false, defaultValue = "mainnet") String network,
+                             Model model) {
+        model.addAttribute("network", network);
+        return "admin/validators";
+    }
+
     @PostMapping("/accounts/search")
     public String searchAccount(@RequestParam String network, @RequestParam String address, Model model) {
         String normalizedAddress = AddressUtil.resolveToHex20(address);
@@ -130,6 +153,58 @@ public class AdminDashboardController {
         return stats;
     }
 
+    // --- Admin API endpoints ---
+    @GetMapping("/api/blockchain-stats")
+    @ResponseBody
+    public ResponseEntity<?> getBlockchainStats() {
+        try {
+            long totalBlocks = blockRepo.count();
+            long finalizedBlocks = blockRepo.countByNetworkAndIsFinalized("mainnet", true);
+            long activeValidators = validatorRepo.findByStatus(Validator.ValidatorStatus.ACTIVE).size();
+
+            Optional<Block> latest = blockRepo.findTopByNetworkOrderByBlockHeightDesc("mainnet");
+
+            Map<String, Object> stats = new LinkedHashMap<>();
+            stats.put("totalBlocks", totalBlocks);
+            stats.put("finalizedBlocks", finalizedBlocks);
+            stats.put("activeValidators", activeValidators);
+            stats.put("latestBlockHeight", latest.map(Block::getBlockHeight).orElse(0L));
+            stats.put("latestBlockHash", latest.map(Block::getBlockHash).orElse("none"));
+            stats.put("latestBlockTime", latest.map(Block::getTimestamp).orElse(0L));
+
+            return ResponseEntity.ok(stats);
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @GetMapping("/api/validators")
+    @ResponseBody
+    public ResponseEntity<?> getAllValidators() {
+        try {
+            List<Validator> validators = validatorRepo.findAll();
+            List<Map<String, Object>> result = validators.stream()
+                    .map(v -> {
+                        Map<String, Object> m = new LinkedHashMap<>();
+                        m.put("address", v.getAddress());
+                        m.put("network", v.getNetwork());
+                        m.put("stakedAmount", v.getStakedAmount());
+                        m.put("reliabilityScore", v.getReliabilityScore());
+                        m.put("weight", validatorService != null ? validatorService.calculateWeight(v) : 0.0);
+                        m.put("status", v.getStatus());
+                        m.put("totalProposals", v.getTotalProposals());
+                        m.put("successfulProposals", v.getSuccessfulProposals());
+                        m.put("registeredAt", v.getRegisteredAt());
+                        return m;
+                    })
+                    .collect(Collectors.toList());
+            return ResponseEntity.ok(Map.of("validators", result, "total", result.size()));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    // --- helpers ---
     private boolean matchesAccount(Account account, String query) {
         return adminViewUtil.contains(account.getAddress(), query)
                 || adminViewUtil.contains(adminViewUtil.address(account.getAddress()), query)

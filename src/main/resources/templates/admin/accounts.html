@@ -1,4 +1,43 @@
 <!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>M3R Node Admin — Accounts</title>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Sora:wght@300;400;600&display=swap" rel="stylesheet">
+  <style>
+    :root{--bg:#07080f;--surface:#0d0f1a;--panel:#111422;--border:#1e2235;--accent:#00d4aa;--text:#e2e6f3;--muted:#5a6180;--mono:'JetBrains Mono',monospace;--ui:'Sora',sans-serif}
+    body{margin:0;font-family:var(--ui);background:var(--bg);color:var(--text)}.sidebar{width:220px;background:var(--surface);position:fixed;inset:0;padding:20px}
+    .main{margin-left:220px;padding:20px}.panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:14px}
+    table{width:100%;border-collapse:collapse}thead th{font-size:11px;color:var(--muted);padding:10px;border-bottom:1px solid var(--border)}tbody td{padding:12px;border-bottom:1px solid var(--border)}
+    .mono{font-family:var(--mono)}.muted{color:var(--muted)}.copy-btn{background:none;border:none;color:var(--muted);cursor:pointer;font-family:var(--mono)}
+  </style>
+</head>
+<body>
+  <aside class="sidebar"><div style="font-family:var(--mono);color:var(--accent);font-size:20px">M3R <span style="color:var(--text);font-weight:400;margin-left:6px">NODE ADMIN</span></div></aside>
+  <main class="main">
+    <header style="height:64px;display:flex;align-items:center;justify-content:space-between"><div style="font-weight:600">Accounts</div><div class="muted mono">Server-rendered list</div></header>
+    <div class="panel">
+      <div style="overflow:auto">
+        <table>
+          <thead><tr><th>ADDRESS</th><th>NETWORK</th><th>BALANCE</th><th>NONCE</th></tr></thead>
+          <tbody>
+            <tr th:each="acc : ${accounts}">
+              <td class="mono"><span th:text="${#strings.substring(acc.address,0,12)} + '...' + ${#strings.substring(acc.address, acc.address.length()-6)}">addr</span>
+                <button class="copy-btn" type="button" th:attr="data-addr=${acc.address}" onclick="copyAddr(this)">Copy</button></td>
+              <td><span th:text="${acc.network}">net</span></td>
+              <td class="mono" style="text-align:right" th:text="${acc.balance}">0</td>
+              <td class="mono" th:text="${acc.nonce}">0</td>
+            </tr>
+            <tr th:if="${accounts == null or #lists.isEmpty(accounts)}"><td colspan="4" class="muted">No accounts</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+  <script>function copyAddr(b){navigator.clipboard.writeText(b.getAttribute('data-addr')).then(()=>{b.textContent='Copied';setTimeout(()=>b.textContent='Copy',900)});}</script>
+</body>
+</html>
+<!DOCTYPE html>
 <html xmlns:th="http://www.thymeleaf.org" lang="en">
 <head>
     <meta charset="UTF-8">

@@ -20,6 +20,7 @@ import com.m3rwallet.service.WalletService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -64,6 +65,7 @@ public class WalletController {
     private FeeDistributionService feeDistributionService;
 
     @Autowired(required = false)
+    @Lazy
     private BlockBroadcastService blockBroadcastService;
 
     @Value("${app.validator.address:}")
@@ -668,6 +670,28 @@ public class WalletController {
         } catch (Exception e) {
             return ResponseEntity.internalServerError()
                     .body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @GetMapping("/{network}/node/status")
+    @ResponseBody
+    public ResponseEntity<?> getNodeStatus(@PathVariable String network) {
+        try {
+            int mempoolSize = mempoolService != null ? mempoolService.size(network) : 0;
+            long latestHeight = blockRepo.findTopByNetworkOrderByBlockHeightDesc(network)
+                    .map(b -> b.getBlockHeight()).orElse(0L);
+
+            Map<String, Object> status = new LinkedHashMap<>();
+            status.put("network", network);
+            status.put("nodeAddress", thisNodeAddress == null || thisNodeAddress.isBlank() ? "unknown" : thisNodeAddress);
+            status.put("mempoolPending", mempoolSize);
+            status.put("latestBlockHeight", latestHeight);
+            status.put("status", "OK");
+
+            return ResponseEntity.ok(status);
+        } catch (Exception e) {
+            log.warn("Failed to build node status: {}", e.getMessage());
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
         }
     }
 }

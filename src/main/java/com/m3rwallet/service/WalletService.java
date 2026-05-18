@@ -36,6 +36,9 @@ public class WalletService {
     @Autowired(required = false)
     private FeeDistributionService feeDistributionService;
 
+    @Autowired(required = false)
+    private com.m3rwallet.repository.TransactionRepository transactionRepository;
+
     @Value("${app.broadcast-fee:100}")
     private long broadcastFee;
 
@@ -128,6 +131,15 @@ public class WalletService {
     public String executeTransaction(String network, String rawTxHex, String pubKeyCompressedHex) {
         TxDecoder.ParsedTx tx = parseAndVerifyTransaction(rawTxHex, pubKeyCompressedHex);
         String txHash = computeTxHash(rawTxHex);
+
+        // ---- Replay protection (global by hash) ----
+        try {
+            if (transactionRepository != null && transactionRepository.existsByTxHash(txHash)) {
+                throw new IllegalArgumentException("Tx already known (replay)");
+            }
+        } catch (Exception e) {
+            log.warn("Replay protection check failed (non-fatal): {}", e.getMessage());
+        }
 
         // ---- Duplicate check ----
         Transaction existingTx = transactionService.getTx(network, txHash);

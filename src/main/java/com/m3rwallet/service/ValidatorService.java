@@ -38,6 +38,18 @@ public class ValidatorService {
     @Value("${app.validator.slot-duration-ms:15000}")
     private long slotDurationMs;
 
+    @Value("${app.validator.enabled:false}")
+    private boolean validatorEnabled;
+
+    @Value("${app.validator.address:}")
+    private String validatorAddress;
+
+    @Value("${app.validator.stake:10000}")
+    private long defaultStake;
+
+    @Value("${app.blockchain.network:mainnet}")
+    private String defaultNetwork;
+
     /**
      * Calculate weight for a validator using formula:
      * W_v = 0.15 * log(1 + S_v) + 0.85 * R_v
@@ -74,7 +86,7 @@ public class ValidatorService {
 
         if (totalWeight <= 0.0d) {
             // fallback: return highest stake
-            validators.sort(Comparator.comparing(v -> v.getStakedAmount()));
+            validators.sort(Comparator.comparing(Validator::getStakedAmount, Comparator.reverseOrder()));
             return validators.get(0);
         }
 
@@ -274,5 +286,21 @@ public class ValidatorService {
         if (v.getStakedAmount() == null || v.getStakedAmount().compareTo(BigDecimal.valueOf(minimumStake)) < 0) return false;
         if (v.getJailedUntil() != null && v.getJailedUntil() > System.currentTimeMillis()) return false;
         return true;
+    }
+
+    @jakarta.annotation.PostConstruct
+    public void autoRegisterIfEnabled() {
+        if (!validatorEnabled) return;
+        if (validatorAddress == null || validatorAddress.isBlank()) return;
+        try {
+            if (validatorRepository.findByAddressAndNetwork(validatorAddress, defaultNetwork).isPresent()) {
+                log.info("Auto-register skipped: {} already registered on {}", validatorAddress, defaultNetwork);
+                return;
+            }
+            registerValidator(validatorAddress, defaultNetwork, java.math.BigDecimal.valueOf(defaultStake));
+            log.info("Auto-registered validator {} on {}", validatorAddress, defaultNetwork);
+        } catch (Exception e) {
+            log.warn("Auto-register failed (non-fatal): {}", e.getMessage());
+        }
     }
 }

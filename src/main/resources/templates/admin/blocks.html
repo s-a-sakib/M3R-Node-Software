@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>M3R Node Admin — Blocks</title>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Sora:wght@300;400;600&display=swap" rel="stylesheet">
+  <style>
+    :root{--bg:#07080f;--surface:#0d0f1a;--panel:#111422;--border:#1e2235;--accent:#00d4aa;--accent2:#5b8df6;--warn:#f0a500;--text:#e2e6f3;--muted:#5a6180;--mono:'JetBrains Mono',monospace;--ui:'Sora',sans-serif}
+    body{margin:0;font-family:var(--ui);background:var(--bg);color:var(--text)}
+    .sidebar{width:220px;background:var(--surface);border-right:1px solid var(--border);position:fixed;inset:0;padding:20px}
+    .main{margin-left:220px;padding:20px}
+    .topbar{height:64px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 20px}
+    .stat-row{display:flex;gap:16px;margin:18px 0}
+    .stat-card{flex:1;background:var(--panel);border:1px solid var(--border);padding:14px;border-radius:10px}
+    .stat-value{font-family:var(--mono);font-size:28px;color:var(--accent)}
+    .panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:14px}
+    table{width:100%;border-collapse:collapse}
+    thead th{font-size:11px;color:var(--muted);padding:10px;border-bottom:1px solid var(--border);text-align:left}
+    tbody td{padding:12px;border-bottom:1px solid var(--border);font-size:13px}
+    .mono{font-family:var(--mono)}.teal{color:var(--accent)}.muted{color:var(--muted)}
+    .pill{display:inline-block;padding:4px 10px;border-radius:16px;font-family:var(--mono);font-size:12px}
+    .pill-final{background:rgba(0,212,170,.08);color:var(--accent);border:1px solid rgba(0,212,170,.12)}
+    .pill-pending{background:rgba(240,165,0,.08);color:var(--warn);border:1px solid rgba(240,165,0,.12)}
+    .tx-badge{padding:6px 8px;border-radius:8px;font-family:var(--mono)}
+  </style>
+</head>
+<body>
+  <aside class="sidebar">
+    <div style="font-family:var(--mono);color:var(--accent);font-size:20px">M3R <span style="color:var(--text);font-weight:400;margin-left:6px">NODE ADMIN</span></div>
+    <nav style="margin-top:18px;color:var(--muted);font-size:13px">
+      <div><a href="/admin">Dashboard</a></div>
+      <div><a href="/admin/blocks" style="color:var(--accent)">Blocks</a></div>
+    </nav>
+  </aside>
+  <main class="main">
+    <header class="topbar"><div style="font-weight:600">Block Explorer</div><div class="mono muted">Auto-refresh every 15s</div></header>
+    <div class="stat-row">
+      <div class="stat-card"><div class="muted">Total Blocks</div><div id="totalBlocks" class="stat-value">---</div></div>
+      <div class="stat-card"><div class="muted">Finalized</div><div id="finalizedBlocks" class="stat-value">---</div></div>
+      <div class="stat-card"><div class="muted">Latest Height</div><div id="latestHeight" class="stat-value">---</div></div>
+    </div>
+
+    <div class="panel">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div style="font-weight:600">Block Explorer</div>
+        <div><button onclick="loadBlocks()" style="background:none;border:1px solid var(--border);color:var(--muted);padding:6px 10px;border-radius:6px;cursor:pointer">↻ Refresh</button></div>
+      </div>
+      <div style="overflow:auto">
+        <table>
+          <thead><tr><th>HEIGHT</th><th>HASH</th><th>SLOT</th><th>PROPOSER</th><th>TXS</th><th>STATUS</th><th>TIME</th></tr></thead>
+          <tbody id="blocks-table">
+            <tr><td colspan="7" class="muted">Loading...</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div style="display:flex;justify-content:flex-end;padding-top:12px"><button id="prevBtn" onclick="prevPage()" style="margin-right:8px">Previous</button><button id="nextBtn" onclick="nextPage()">Next</button></div>
+    </div>
+  </main>
+
+  <script>
+    const API_STATS='/admin/api/blockchain-stats';
+    let page=0,size=30;
+    function truncHash(h){ if(!h) return ''; return h.slice(0,10)+'...'+h.slice(-6); }
+    function relTime(ts){ if(!ts) return ''; const d=Math.floor((Date.now()-ts)/1000); if(d<60) return d+'s ago'; if(d<3600) return Math.floor(d/60)+'m ago'; if(d<86400) return Math.floor(d/3600)+'h ago'; return Math.floor(d/86400)+'d ago'; }
+
+    async function loadStats(){ try{ const s=(await (await fetch(API_STATS)).json()); document.getElementById('totalBlocks').textContent=s.totalBlocks??'—'; document.getElementById('finalizedBlocks').textContent=s.finalizedBlocks??'—'; document.getElementById('latestHeight').textContent=s.latestBlockHeight??'—'; }catch(e){console.warn(e);} }
+
+    async function loadBlocks(){ try{ const res=await fetch(`/mainnet/blocks?size=${size}&page=${page}`); if(!res.ok) throw new Error('fetch'); const json=await res.json(); const rows=json.blocks||[]; const tb=document.getElementById('blocks-table'); tb.innerHTML=''; if(rows.length===0){ tb.innerHTML='<tr><td colspan="7" class="muted">No blocks yet. Validator must be registered.</td></tr>'; return; } for(const r of rows){ const status = r.isFinalized?'<span class="pill pill-final">FINALIZED</span>':'<span class="pill pill-pending">PENDING</span>'; const txBadge = `<span class="tx-badge" style="background:${(r.txCount>0)?'rgba(0,212,170,.06)':'transparent'};color:${(r.txCount>0)?'var(--accent)':'var(--muted)'}">${r.txCount||0}</span>`; const tr=document.createElement('tr'); tr.innerHTML=`<td class="mono teal">${r.blockHeight}</td><td class="mono muted">${truncHash(r.blockHash)}</td><td class="mono">${r.slotNumber||''}</td><td class="mono">${(r.proposerAddress||'').slice(0,10)+'...'+(r.proposerAddress||'').slice(-6)}</td><td style="text-align:center">${txBadge}</td><td>${status}</td><td class="muted">${r.timestamp?relTime(r.timestamp):'-'}</td>`; tb.appendChild(tr);} }catch(e){ console.error(e); document.getElementById('blocks-table').innerHTML='<tr><td colspan="7" class="muted">ERR</td></tr>'; } }
+
+    function prevPage(){ if(page>0){ page--; loadBlocks(); } }
+    function nextPage(){ page++; loadBlocks(); }
+
+    loadStats(); loadBlocks(); setInterval(()=>{loadStats();loadBlocks();},15000);
+  </script>
+</body>
+</html>

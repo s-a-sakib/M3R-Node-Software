@@ -13,6 +13,7 @@ import com.m3rwallet.service.ValidatorService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -43,6 +44,7 @@ public class BlockScheduler {
     private final AtomicLong lastProposedSlot = new AtomicLong(-1L);
 
     @Autowired(required = false)
+    @Lazy
     private BlockBroadcastService blockBroadcastService;
 
     public BlockScheduler(ValidatorService validatorService,
@@ -128,12 +130,7 @@ public class BlockScheduler {
             // TODO Day 6: Replace immediate finalize with weighted consensus
             feeDistributionService.distributeConsensusFees(finalized, network);
 
-            try {
-                peerSyncService.broadcastBlock(finalized);
-                log.info("[SLOT {}] Block {} broadcast to peers", slotNumber, finalized.getBlockHeight());
-            } catch (Exception e) {
-                log.warn("Failed to broadcast block {}: {}", finalized.getBlockHeight(), e.getMessage());
-            }
+            
 
             mempoolService.removeTransactions(pending.stream().map(MempoolService.PendingTx::txHash).collect(Collectors.toList()));
             lastProposedSlot.set(slotNumber);

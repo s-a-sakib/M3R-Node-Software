@@ -32,6 +32,9 @@ public class BlockBroadcastService {
     @Autowired(required = false)
     private ConsensusProperties consensusProperties;
 
+    @Autowired(required = false)
+    private BlockValidationService blockValidationService;
+
     private final BlockRepository blockRepo;
     private final BlockTransactionRepository blockTxRepo;
     private final MempoolService mempoolService;
@@ -157,6 +160,27 @@ public class BlockBroadcastService {
             if (blockRepo.findByBlockHashAndNetwork(blockHash, effectiveNetwork).isPresent()) {
                 return Map.of("status", "ALREADY_KNOWN", "blockHeight", blockHeight);
             }
+
+            // === BLOCK VALIDATION ===
+            if (blockValidationService != null) {
+                var result = blockValidationService.validateReceivedBlock(payload, effectiveNetwork);
+
+                if (result.violations().contains("ALREADY_KNOWN")) {
+                    return Map.of(
+                            "status", "ALREADY_KNOWN",
+                            "blockHeight", result.blockHeight()
+                    );
+                }
+
+                if (!result.valid()) {
+                    log.warn("Rejected block from peer. Violations: {}", result.violations());
+                    return Map.of(
+                            "status", "REJECTED",
+                            "violations", result.violations()
+                    );
+                }
+            }
+            // === END VALIDATION ===
 
             Block block = new Block();
             block.setBlockHeight(blockHeight);

@@ -49,6 +49,7 @@ public class ValidatorWeight {
     @Column(name = "calculated_at")
     private Long calculatedAt;
 
+    @Builder.Default
     @Column(name = "is_stale", nullable = false)
     private Boolean isStale = Boolean.FALSE;
 

@@ -39,18 +39,23 @@ public class Validator {
     private BigDecimal stakedAmount;
 
     /** Reliability score scaled by 1_000_000 (e.g. 0.9231 -> 923100) */
+    @Builder.Default
     @Column(name = "reliability_score_scaled", nullable = false)
     private Long reliabilityScoreScaled = 0L;
 
+    @Builder.Default
     @Column(name = "total_proposals", nullable = false)
     private Long totalProposals = 0L;
 
+    @Builder.Default
     @Column(name = "successful_proposals", nullable = false)
     private Long successfulProposals = 0L;
 
+    @Builder.Default
     @Column(name = "corrupted_proposals", nullable = false)
     private Long corruptedProposals = 0L;
 
+    @Builder.Default
     @Enumerated(EnumType.STRING)
     @Column(name = "status", length = 20, nullable = false)
     private ValidatorStatus status = ValidatorStatus.INACTIVE;

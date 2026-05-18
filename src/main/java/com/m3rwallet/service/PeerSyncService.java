@@ -112,7 +112,18 @@ public class PeerSyncService {
             // best-effort: fetch their peer list
             try {
                 String url = peerUrl + "/api/node/peer/list?network=" + network;
-                ResponseEntity<String[]> resp = restTemplate.getForEntity(url, String[].class);
+                ResponseEntity<Object> resp = restTemplate.getForEntity(url, Object.class);
+                Object body = resp.getBody();
+                // tolerant: accept either raw array response or { peers: [...] } object
+                List<String> urls = new ArrayList<>();
+                if (body instanceof List<?> listBody) {
+                    for (Object o : listBody) if (o != null) urls.add(String.valueOf(o).trim());
+                } else if (body instanceof Map<?, ?> mapBody) {
+                    Object peersObj = mapBody.get("peers");
+                    if (peersObj instanceof List<?> pList) {
+                        for (Object o : pList) if (o != null) urls.add(String.valueOf(o).trim());
+                    }
+                }
                 // ignore response content; discovery will pick them up later
             } catch (Exception ex) {
                 log.debug("Ignoring error while fetching peers from {}: {}", peerUrl, ex.getMessage());
@@ -128,30 +139,39 @@ public class PeerSyncService {
         long now = Instant.now().toEpochMilli();
         for (Peer peer : alive) {
             String base = peer.getPeerUrl();
-            try {
-                String url = base + "/api/node/peer/list?network=" + network;
-                ResponseEntity<String[]> resp = restTemplate.getForEntity(url, String[].class);
-                String[] urls = resp.getBody();
-                if (urls == null) continue;
-                for (String u : urls) {
-                    if (u == null) continue;
-                    String trimmed = u.trim();
-                    if (trimmed.isBlank() || trimmed.equals(selfUrl)) continue;
-                    Optional<Peer> exists = peerRepository.findByPeerUrlAndNetwork(trimmed, network);
-                    if (exists.isEmpty()) {
-                        Peer np = new Peer();
-                        np.setPeerUrl(trimmed);
-                        np.setNetwork(network);
-                        np.setIsAlive(true);
-                        np.setFirstSeenAt(now);
-                        peerRepository.save(np);
-                        discovered++;
+                try {
+                    String url = base + "/api/node/peer/list?network=" + network;
+                    ResponseEntity<Object> resp = restTemplate.getForEntity(url, Object.class);
+                    Object body = resp.getBody();
+                    List<String> urls = new ArrayList<>();
+                    if (body instanceof List<?> listBody) {
+                        for (Object o : listBody) if (o != null) urls.add(String.valueOf(o).trim());
+                    } else if (body instanceof Map<?, ?> mapBody) {
+                        Object peersObj = mapBody.get("peers");
+                        if (peersObj instanceof List<?> pList) {
+                            for (Object o : pList) if (o != null) urls.add(String.valueOf(o).trim());
+                        }
                     }
+                    if (urls.isEmpty()) continue;
+                    for (String u : urls) {
+                        if (u == null) continue;
+                        String trimmed = u.trim();
+                        if (trimmed.isBlank() || trimmed.equals(selfUrl)) continue;
+                        Optional<Peer> exists = peerRepository.findByPeerUrlAndNetwork(trimmed, network);
+                        if (exists.isEmpty()) {
+                            Peer np = new Peer();
+                            np.setPeerUrl(trimmed);
+                            np.setNetwork(network);
+                            np.setIsAlive(true);
+                            np.setFirstSeenAt(now);
+                            peerRepository.save(np);
+                            discovered++;
+                        }
+                    }
+                    log.info("Discovered {} new peers from {}", discovered, base);
+                } catch (Exception e) {
+                    log.warn("Peer discovery failed from {}: {}", base, e.getMessage());
                 }
-                log.info("Discovered {} new peers from {}", discovered, base);
-            } catch (Exception e) {
-                log.warn("Peer discovery failed from {}: {}", base, e.getMessage());
-            }
         }
     }
 

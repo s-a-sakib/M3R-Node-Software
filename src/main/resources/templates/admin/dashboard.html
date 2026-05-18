@@ -1,4 +1,184 @@
 <!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>M3R Node Admin — Dashboard</title>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Sora:wght@300;400;600&display=swap" rel="stylesheet">
+  <style>
+    :root{
+      --bg:#07080f; --surface:#0d0f1a; --panel:#111422; --border:#1e2235;
+      --accent:#00d4aa; --accent2:#5b8df6; --warn:#f0a500; --danger:#e84560;
+      --text:#e2e6f3; --muted:#5a6180; --mono:'JetBrains Mono', monospace; --ui:'Sora', sans-serif;
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%;margin:0;background:var(--bg);color:var(--text);font-family:var(--ui);}
+    .app{display:flex;min-height:100vh}
+    /* Sidebar */
+    .sidebar{width:220px;background:var(--surface);border-right:1px solid var(--border);padding:20px;position:fixed;left:0;top:0;bottom:0}
+    .logo{font-family:var(--mono);color:var(--accent);font-weight:700;font-size:20px}
+    .subtitle{font-size:11px;color:var(--muted);margin-top:4px}
+    nav{margin-top:20px}
+    .nav-section{margin-top:14px;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:1px}
+    .nav-link{display:flex;align-items:center;padding:10px 6px;border-left:4px solid transparent;color:var(--muted);text-decoration:none;border-radius:4px}
+    .nav-link:hover{background:rgba(255,255,255,.02);color:var(--text)}
+    .nav-link.active{border-left-color:var(--accent);color:var(--accent)}
+    .nav-link .icon{width:18px;margin-right:10px}
+    .sidebar-bottom{position:absolute;left:20px;right:20px;bottom:20px;font-size:12px;color:var(--muted)}
+
+    /* Topbar */
+    .main{margin-left:220px;flex:1;display:flex;flex-direction:column}
+    .topbar{height:64px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 20px}
+    .page-title{font-family:var(--ui);font-weight:600}
+    .live-pill{display:inline-flex;align-items:center;background:rgba(0,212,170,.06);color:var(--accent);padding:6px 10px;border-radius:20px;font-family:var(--mono);font-size:12px}
+    .live-dot{width:8px;height:8px;background:var(--accent);border-radius:50%;margin-right:8px;box-shadow:0 0 8px rgba(0,212,170,.6)}
+
+    .content{padding:20px}
+    .row{display:flex;gap:16px}
+    .col{flex:1}
+    .col-2-3{flex:2}
+    .stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:18px}
+    .stat-card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:18px;position:relative}
+    .stat-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:1px}
+    .stat-value{font-family:var(--mono);font-size:32px;color:var(--accent);margin-top:8px}
+
+    .panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:14px}
+    table{width:100%;border-collapse:collapse}
+    thead th{font-size:11px;color:var(--muted);padding:8px 12px;border-bottom:1px solid var(--border);text-align:left}
+    tbody td{padding:12px;color:var(--text);border-bottom:1px solid var(--border);font-size:13px}
+    .mono{font-family:var(--mono)}
+    .muted{color:var(--muted)}
+
+    .quick-stats{display:flex;flex-direction:column;gap:12px}
+    .quick-item{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:transparent;border-radius:6px}
+    .footer{padding:20px;text-align:center;color:var(--muted);font-size:13px;margin-top:20px}
+
+    /* Responsive */
+    @media(max-width:900px){.stat-grid{grid-template-columns:repeat(2,1fr)}.sidebar{display:none}.main{margin-left:0}}
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="logo">M3R <span style="color:var(--text);font-weight:400;margin-left:6px">NODE ADMIN</span></div>
+      <div class="subtitle">Local access only</div>
+      <nav>
+        <div class="nav-section">Overview</div>
+        <a href="/admin" class="nav-link active"><span class="icon">▮</span>Dashboard</a>
+        <div class="nav-section">Blockchain</div>
+        <a href="/admin/transactions" class="nav-link"><span class="icon">☰</span>Transactions</a>
+        <a href="/admin/accounts" class="nav-link"><span class="icon">👤</span>Accounts</a>
+        <a href="/admin/escrows" class="nav-link"><span class="icon">✱</span>Escrows</a>
+        <a href="/admin/blocks" class="nav-link"><span class="icon">◼</span>Blocks</a>
+        <div class="nav-section">Network</div>
+        <a href="/admin/validators" class="nav-link"><span class="icon">⚑</span>Validators</a>
+      </nav>
+      <div class="sidebar-bottom">
+        Node: <span id="sidebar-node-addr" class="mono muted">loading...</span>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <div class="page-title">Dashboard <div style="font-size:12px;color:var(--muted);font-weight:300;margin-top:2px">System overview & live metrics</div></div>
+        </div>
+        <div><span class="live-pill"><span class="live-dot"></span>LIVE</span></div>
+      </header>
+
+      <section class="content">
+        <div class="stat-grid" id="stat-grid">
+          <div class="stat-card">
+            <div class="stat-label">Finalized Blocks</div>
+            <div class="stat-value mono" id="finalizedBlocks">---</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Active Validators</div>
+            <div class="stat-value mono" id="activeValidators">---</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Latest Block</div>
+            <div class="stat-value mono" id="latestBlock">---</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Pending Txs</div>
+            <div class="stat-value mono" id="pendingTxs">---</div>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="col col-2-3">
+            <div class="panel">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+                <div style="font-weight:600">Latest Blocks</div>
+                <div class="muted">Auto-refresh every 15s</div>
+              </div>
+              <div style="overflow:auto">
+                <table>
+                  <thead><tr><th>Height</th><th>Hash</th><th>Proposer</th><th>Txs</th><th>Time</th></tr></thead>
+                  <tbody id="blocks-tbody">
+                    <tr><td colspan="5" class="muted">Loading...</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div class="col">
+            <div class="panel quick-stats">
+              <div class="quick-item"><div class="muted">Mainnet Accounts</div><div class="mono" th:text="${stats.mainnetAccounts}">${stats.mainnetAccounts}</div></div>
+              <div class="quick-item"><div class="muted">Mainnet Transactions</div><div class="mono" th:text="${stats.mainnetTransactions}">${stats.mainnetTransactions}</div></div>
+              <div class="quick-item"><div class="muted">Testnet Accounts</div><div class="mono" th:text="${stats.testnetAccounts}">${stats.testnetAccounts}</div></div>
+              <div class="quick-item"><div class="muted">Testnet Transactions</div><div class="mono" th:text="${stats.testnetTransactions}">${stats.testnetTransactions}</div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="footer">M3R Wallet Node • © <span id="currentYear"></span></div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const API_STATS = '/admin/api/blockchain-stats';
+    const API_BLOCKS = '/mainnet/blocks?size=8';
+    const API_STATUS = '/mainnet/node/status';
+
+    function truncHash(h){ if(!h) return ''; return h.slice(0,8)+'...'+h.slice(-4); }
+    function relTime(ts){ if(!ts) return ''; const d = Math.floor((Date.now()-ts)/1000); if(d<60) return d+'s ago'; if(d<3600) return Math.floor(d/60)+'m ago'; if(d<86400) return Math.floor(d/3600)+'h ago'; return Math.floor(d/86400)+'d ago'; }
+
+    async function fetchStats(){
+      try{
+        document.getElementById('finalizedBlocks').textContent='---';
+        document.getElementById('activeValidators').textContent='---';
+        document.getElementById('latestBlock').textContent='---';
+        document.getElementById('pendingTxs').textContent='---';
+
+        const [sRes,bRes] = await Promise.all([fetch(API_STATS), fetch(API_BLOCKS)]);
+        if(!sRes.ok) throw new Error('stats');
+        const s = await sRes.json();
+        document.getElementById('finalizedBlocks').textContent = s.finalizedBlocks ?? 'ERR';
+        document.getElementById('activeValidators').textContent = s.activeValidators ?? 'ERR';
+        document.getElementById('latestBlock').textContent = s.latestBlockHeight ?? 'ERR';
+
+        if(!bRes.ok) throw new Error('blocks');
+        const bJson = await bRes.json();
+        renderBlocks(bJson.blocks || []);
+
+        // node status
+        try{ const st = await (await fetch(API_STATUS)).json(); document.getElementById('pendingTxs').textContent = st.pendingTxs ?? '0'; const addr = document.getElementById('sidebar-node-addr'); if(st.nodeAddress) addr.textContent = st.nodeAddress; }catch(e){ console.warn('status fetch failed',e); }
+      }catch(e){ console.error(e); if(e.message === 'stats') { document.getElementById('finalizedBlocks').textContent='ERR'; } }
+    }
+
+    function renderBlocks(rows){ const tbody=document.getElementById('blocks-tbody'); tbody.innerHTML=''; if(!rows||rows.length===0){ tbody.innerHTML='<tr><td colspan="5" class="muted">No blocks yet. Validator must be registered.</td></tr>'; return; }
+      for(const r of rows){ const tr=document.createElement('tr'); tr.innerHTML=`<td class="mono">${r.blockHeight}</td><td class="mono muted">${truncHash(r.blockHash)}</td><td class="mono">${(r.proposerAddress||'').slice(0,12)}</td><td style="text-align:center">${r.txCount||0}</td><td class="muted">${r.timestamp?relTime(r.timestamp):'-'}</td>`; tbody.appendChild(tr);} }
+
+    document.getElementById('currentYear').textContent = new Date().getFullYear();
+    fetchStats(); setInterval(fetchStats,15000);
+  </script>
+</body>
+</html>
+<!DOCTYPE html>
 <html xmlns:th="http://www.thymeleaf.org" lang="en">
 <head>
     <meta charset="UTF-8">
