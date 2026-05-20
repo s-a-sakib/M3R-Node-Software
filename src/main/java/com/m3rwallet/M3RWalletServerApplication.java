@@ -32,6 +32,7 @@ public class M3RWalletServerApplication {
             walletService.initializeNetworks();
             log.info("========================================");
             log.info("Genesis initialization complete!");
+            log.info("Node Dashboard: http://localhost:3000/");
             log.info("Admin Dashboard: http://localhost:3000/admin");
             log.info("========================================");
         } catch (Exception e) {

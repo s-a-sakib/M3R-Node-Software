@@ -26,9 +26,7 @@ public class WalletService {
     private final TransactionService transactionService;
     private final EscrowService escrowService;
     private final TxLedgerService txLedgerService;
-
-    @Value("${app.validator.address:}")
-    private String thisNodeAddress;
+    private final NodeIdentityService nodeIdentityService;
 
     @Autowired(required = false)
     private MempoolService mempoolService;
@@ -52,10 +50,7 @@ public class WalletService {
     private String genesisAddress;
 
     private String getThisNodeAddress() {
-        return (thisNodeAddress != null
-                && !thisNodeAddress.isBlank())
-                ? thisNodeAddress
-                : "unknown-node";
+        return nodeIdentityService.getAddressOrUnknown();
     }
 
     @Transactional

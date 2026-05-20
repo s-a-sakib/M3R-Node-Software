@@ -9,6 +9,7 @@ import com.m3rwallet.service.SlashDetectionService;
 import com.m3rwallet.service.PeerSyncService;
 import com.m3rwallet.service.FeeDistributionService;
 import com.m3rwallet.service.MempoolService;
+import com.m3rwallet.service.NodeIdentityService;
 import com.m3rwallet.service.ValidatorService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -53,8 +54,8 @@ public class BlockScheduler {
                           FeeDistributionService feeDistributionService,
                           SlashDetectionService slashDetectionService,
                           PeerSyncService peerSyncService,
+                          NodeIdentityService nodeIdentityService,
                           @Value("${app.validator.enabled:false}") boolean validatorEnabled,
-                          @Value("${app.validator.address:}") String thisNodeAddress,
                           @Value("${app.blockchain.network:mainnet}") String network,
                           @Value("${app.validator.slot-duration-ms:15000}") long slotDurationMs,
                           @Value("${app.blockchain.max-block-size:5000}") int maxBlockSize) {
@@ -65,7 +66,7 @@ public class BlockScheduler {
         this.slashDetectionService = slashDetectionService;
         this.peerSyncService = peerSyncService;
         this.validatorEnabled = validatorEnabled;
-        this.thisNodeAddress = thisNodeAddress;
+        this.thisNodeAddress = nodeIdentityService.getAddressOrUnknown();
         this.network = network;
         this.slotDurationMs = slotDurationMs;
         this.maxBlockSize = maxBlockSize;

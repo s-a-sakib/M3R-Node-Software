@@ -59,56 +59,33 @@ public class AdminDashboardController {
     public String accounts(@RequestParam(required = false, defaultValue = "mainnet") String network,
                            @RequestParam(required = false, defaultValue = "") String q,
                            Model model) {
-        List<Account> accounts = accountService.getAccountsByNetwork(network).stream()
-                .filter(account -> matchesAccount(account, q))
-                .toList();
-        model.addAttribute("network", network);
-        model.addAttribute("q", q);
-        model.addAttribute("accounts", accounts);
-        model.addAttribute("networks", new String[]{"mainnet", "testnet", "legacy"});
-        return "admin/accounts";
+        return dashboard(model);
     }
 
     @GetMapping("/transactions")
     public String transactions(@RequestParam(required = false, defaultValue = "mainnet") String network,
                                @RequestParam(required = false, defaultValue = "") String q,
                                Model model) {
-        List<Transaction> transactions = transactionService.getTransactionsByNetwork(network).stream()
-                .filter(transaction -> matchesTransaction(transaction, q))
-                .toList();
-        model.addAttribute("network", network);
-        model.addAttribute("q", q);
-        model.addAttribute("transactions", transactions);
-        model.addAttribute("networks", new String[]{"mainnet", "testnet", "legacy"});
-        return "admin/transactions";
+        return dashboard(model);
     }
 
     @GetMapping("/escrows")
     public String escrows(@RequestParam(required = false, defaultValue = "mainnet") String network,
                           @RequestParam(required = false, defaultValue = "") String q,
                           Model model) {
-        List<Escrow> escrows = escrowService.getEscrowsByNetwork(network).stream()
-                .filter(escrow -> matchesEscrow(escrow, q))
-                .toList();
-        model.addAttribute("network", network);
-        model.addAttribute("q", q);
-        model.addAttribute("escrows", escrows);
-        model.addAttribute("networks", new String[]{"mainnet", "testnet", "legacy"});
-        return "admin/escrows";
+        return dashboard(model);
     }
 
     @GetMapping("/blocks")
     public String blocks(@RequestParam(required = false, defaultValue = "mainnet") String network,
                          Model model) {
-        model.addAttribute("network", network);
-        return "admin/blocks";
+        return dashboard(model);
     }
 
     @GetMapping("/validators")
     public String validators(@RequestParam(required = false, defaultValue = "mainnet") String network,
                              Model model) {
-        model.addAttribute("network", network);
-        return "admin/validators";
+        return dashboard(model);
     }
 
     @PostMapping("/accounts/search")
@@ -199,6 +176,92 @@ public class AdminDashboardController {
                     })
                     .collect(Collectors.toList());
             return ResponseEntity.ok(Map.of("validators", result, "total", result.size()));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @GetMapping("/api/accounts")
+    @ResponseBody
+    public ResponseEntity<?> getAccountsApi(@RequestParam(required = false, defaultValue = "mainnet") String network,
+                                            @RequestParam(required = false, defaultValue = "") String q,
+                                            @RequestParam(required = false, defaultValue = "50") int limit) {
+        try {
+            int cappedLimit = Math.max(1, Math.min(limit, 200));
+            List<Map<String, Object>> accounts = accountService.getAccountsByNetwork(network).stream()
+                    .filter(account -> matchesAccount(account, q))
+                    .limit(cappedLimit)
+                    .map(account -> {
+                        Map<String, Object> m = new LinkedHashMap<>();
+                        m.put("network", account.getNetwork());
+                        m.put("address", account.getAddress());
+                        m.put("displayAddress", adminViewUtil.address(account.getAddress()));
+                        m.put("balance", account.getBalance());
+                        m.put("displayBalance", adminViewUtil.amount(account.getBalance()));
+                        m.put("nonce", account.getNonce());
+                        return m;
+                    })
+                    .toList();
+            return ResponseEntity.ok(Map.of("network", network, "accounts", accounts, "total", accounts.size()));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @GetMapping("/api/transactions")
+    @ResponseBody
+    public ResponseEntity<?> getTransactionsApi(@RequestParam(required = false, defaultValue = "mainnet") String network,
+                                                @RequestParam(required = false, defaultValue = "") String q,
+                                                @RequestParam(required = false, defaultValue = "50") int limit) {
+        try {
+            int cappedLimit = Math.max(1, Math.min(limit, 200));
+            List<Map<String, Object>> transactions = transactionService.getTransactionsByNetwork(network).stream()
+                    .filter(transaction -> matchesTransaction(transaction, q))
+                    .sorted(Comparator.comparing(Transaction::getCreatedAt, Comparator.nullsLast(Comparator.reverseOrder())))
+                    .limit(cappedLimit)
+                    .map(transaction -> {
+                        Map<String, Object> m = new LinkedHashMap<>();
+                        m.put("network", transaction.getNetwork());
+                        m.put("hash", transaction.getHash());
+                        m.put("status", transaction.getStatus());
+                        m.put("createdAt", transaction.getCreatedAt());
+                        return m;
+                    })
+                    .toList();
+            return ResponseEntity.ok(Map.of("network", network, "transactions", transactions, "total", transactions.size()));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @GetMapping("/api/escrows")
+    @ResponseBody
+    public ResponseEntity<?> getEscrowsApi(@RequestParam(required = false, defaultValue = "mainnet") String network,
+                                           @RequestParam(required = false, defaultValue = "") String q,
+                                           @RequestParam(required = false, defaultValue = "50") int limit) {
+        try {
+            int cappedLimit = Math.max(1, Math.min(limit, 200));
+            List<Map<String, Object>> escrows = escrowService.getEscrowsByNetwork(network).stream()
+                    .filter(escrow -> matchesEscrow(escrow, q))
+                    .sorted(Comparator.comparing(Escrow::getCreatedAt, Comparator.nullsLast(Comparator.reverseOrder())))
+                    .limit(cappedLimit)
+                    .map(escrow -> {
+                        Map<String, Object> m = new LinkedHashMap<>();
+                        m.put("network", escrow.getNetwork());
+                        m.put("escrowId", escrow.getEscrowId());
+                        m.put("buyer", escrow.getBuyer());
+                        m.put("buyerDisplay", adminViewUtil.address(escrow.getBuyer()));
+                        m.put("seller", escrow.getSeller());
+                        m.put("sellerDisplay", adminViewUtil.address(escrow.getSeller()));
+                        m.put("arbiter", escrow.getArbiter());
+                        m.put("arbiterDisplay", adminViewUtil.address(escrow.getArbiter()));
+                        m.put("amount", escrow.getAmount());
+                        m.put("displayAmount", adminViewUtil.amount(escrow.getAmount()));
+                        m.put("createdAt", escrow.getCreatedAt());
+                        return m;
+                    })
+                    .toList();
+            return ResponseEntity.ok(Map.of("network", network, "escrows", escrows, "total", escrows.size()));
         } catch (Exception e) {
             return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
         }

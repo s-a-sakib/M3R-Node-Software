@@ -28,6 +28,7 @@ public class NodeConsensusService {
     private final WalletService walletService;
     private final RestTemplate restTemplate;
     private final ConsensusProperties consensusProperties;
+    private final NodeIdentityService nodeIdentityService;
 
     @Autowired(required = false)
     private ValidatorService validatorService;
@@ -37,9 +38,6 @@ public class NodeConsensusService {
 
     @Value("${app.blockchain.network:mainnet}")
     private String defaultNetwork;
-
-    @Value("${app.validator.address:}")
-    private String thisNodeAddress;
 
     public boolean isEnabled() {
         return consensusProperties.isEnabled() && !normalizedPeers().isEmpty();
@@ -68,7 +66,7 @@ public class NodeConsensusService {
 
         int yesVotes = 1;
         List<String> yesVoterAddresses = new ArrayList<>();
-        yesVoterAddresses.add(thisNodeAddress);
+        yesVoterAddresses.add(nodeIdentityService.getAddressOrUnknown());
         List<String> rejections = new ArrayList<>();
         List<String> unavailable = new ArrayList<>();
 

@@ -59,7 +59,7 @@ app:
 # Validator and fee policy additions (Day 2)
   validator:
     enabled: true
-    address: ""
+    address: ${M3R_VALIDATOR_ADDRESS:}
     minimum-stake: 1000
     slot-duration-ms: 15000
     unbonding-period-blocks: 100
@@ -80,3 +80,4 @@ app:
   node:
     self-url: ${NODE_SELF_URL:http://localhost:3000}
     bootstrap-peers: ${NODE_BOOTSTRAP_PEERS:}
+    private-key: ${M3R_NODE_PRIVATE_KEY:}

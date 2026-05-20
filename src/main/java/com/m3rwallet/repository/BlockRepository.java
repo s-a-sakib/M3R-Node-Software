@@ -1,6 +1,8 @@
 package com.m3rwallet.repository;
 
 import com.m3rwallet.entity.Block;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
@@ -26,6 +28,12 @@ public interface BlockRepository extends JpaRepository<Block, Long> {
 
     @Transactional(readOnly = true)
     Optional<Block> findTopByNetworkOrderByBlockHeightDesc(String network);
+
+    @Transactional(readOnly = true)
+    Page<Block> findByNetwork(String network, Pageable pageable);
+
+    @Transactional(readOnly = true)
+    Optional<Block> findByBlockHeightAndNetwork(Long blockHeight, String network);
 
     @Transactional(readOnly = true)
     List<Block> findByNetworkAndIsFinalized(String network, Boolean isFinalized);

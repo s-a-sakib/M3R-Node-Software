@@ -31,6 +31,7 @@ public class ValidatorService {
     private final ValidatorRepository validatorRepository;
     private final ValidatorWeightRepository validatorWeightRepository;
     private final SlashEventRepository slashEventRepository;
+    private final NodeIdentityService nodeIdentityService;
 
     @Value("${app.validator.minimum-stake:1000}")
     private long minimumStake;
@@ -40,9 +41,6 @@ public class ValidatorService {
 
     @Value("${app.validator.enabled:false}")
     private boolean validatorEnabled;
-
-    @Value("${app.validator.address:}")
-    private String validatorAddress;
 
     @Value("${app.validator.stake:10000}")
     private long defaultStake;
@@ -291,7 +289,9 @@ public class ValidatorService {
     @jakarta.annotation.PostConstruct
     public void autoRegisterIfEnabled() {
         if (!validatorEnabled) return;
+        String validatorAddress = nodeIdentityService.getAddressOrUnknown();
         if (validatorAddress == null || validatorAddress.isBlank()) return;
+        if ("unknown".equals(validatorAddress)) return;
         try {
             if (validatorRepository.findByAddressAndNetwork(validatorAddress, defaultNetwork).isPresent()) {
                 log.info("Auto-register skipped: {} already registered on {}", validatorAddress, defaultNetwork);

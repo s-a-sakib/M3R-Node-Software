@@ -13,6 +13,7 @@ import com.m3rwallet.repository.ValidatorRepository;
 import com.m3rwallet.service.BlockBroadcastService;
 import com.m3rwallet.service.FeeDistributionService;
 import com.m3rwallet.service.MempoolService;
+import com.m3rwallet.service.NodeIdentityService;
 import com.m3rwallet.service.NodeConsensusService;
 import com.m3rwallet.service.TxLedgerService;
 import com.m3rwallet.service.ValidatorService;
@@ -21,7 +22,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -45,6 +45,7 @@ public class WalletController {
     private final TxLedgerService txLedgerService;
     private final NodeConsensusService nodeConsensusService;
     private final ConsensusProperties consensusProperties;
+    private final NodeIdentityService nodeIdentityService;
 
     @Autowired
     private BlockRepository blockRepo;
@@ -67,9 +68,6 @@ public class WalletController {
     @Autowired(required = false)
     @Lazy
     private BlockBroadcastService blockBroadcastService;
-
-    @Value("${app.validator.address:}")
-    private String thisNodeAddress;
 
     /**
      * Factory method to create network-specific routers
@@ -197,7 +195,7 @@ public class WalletController {
             return ResponseEntity.ok(TxResponse.builder()
                     .status("ACCEPTED")
                     .txHash(txHash)
-                    .validatorAddress(thisNodeAddress)
+                    .validatorAddress(nodeIdentityService.getAddressOrUnknown())
                     .message("OK")
                     .build());
         } catch (IllegalArgumentException e) {
@@ -457,7 +455,7 @@ public class WalletController {
             Pageable pageable = PageRequest.of(
                     page, size,
                     Sort.by(Sort.Direction.DESC, "blockHeight"));
-            Page<Block> blocks = blockRepo.findAll(pageable);
+            Page<Block> blocks = blockRepo.findByNetwork(network, pageable);
 
             List<Map<String, Object>> result = blocks.stream()
                     .map(b -> {
@@ -493,7 +491,7 @@ public class WalletController {
             @PathVariable String network,
             @PathVariable Long height) {
         try {
-            Optional<Block> blockOpt = blockRepo.findById(height);
+            Optional<Block> blockOpt = blockRepo.findByBlockHeightAndNetwork(height, network);
             if (blockOpt.isEmpty())
                 return ResponseEntity.notFound().build();
 
@@ -683,8 +681,11 @@ public class WalletController {
 
             Map<String, Object> status = new LinkedHashMap<>();
             status.put("network", network);
-            status.put("nodeAddress", thisNodeAddress == null || thisNodeAddress.isBlank() ? "unknown" : thisNodeAddress);
+            status.put("nodeAddress", nodeIdentityService.getAddressOrUnknown());
+            status.put("publicKeyCompressed", nodeIdentityService.getPublicKeyCompressedHex());
+            status.put("privateKeyBacked", nodeIdentityService.isPrivateKeyBacked());
             status.put("mempoolPending", mempoolSize);
+            status.put("pendingTxs", mempoolSize);
             status.put("latestBlockHeight", latestHeight);
             status.put("status", "OK");
 
