@@ -46,6 +46,20 @@ public class NodeSyncController {
         if (exists.isPresent()) {
             return ResponseEntity.ok(Map.of("message", "Already have block"));
         }
+        Optional<Block> sameHeight = blockRepository.findById(block.getBlockHeight());
+        if (sameHeight.isPresent()) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
+                    "message", "height already exists",
+                    "blockHeight", block.getBlockHeight()));
+        }
+        if (block.getBlockHeight() > 1) {
+            Optional<Block> parent = blockRepository.findById(block.getBlockHeight() - 1);
+            if (parent.isEmpty() || !java.util.Objects.equals(parent.get().getBlockHash(), block.getParentBlockHash())) {
+                return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
+                        "message", "parent missing or mismatched",
+                        "blockHeight", block.getBlockHeight()));
+            }
+        }
         block.setIsFinalized(true);
         blockRepository.save(block);
         log.info("Received block height={} from peer network={}", block.getBlockHeight(), block.getNetwork());

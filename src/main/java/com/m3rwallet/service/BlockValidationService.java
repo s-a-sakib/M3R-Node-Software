@@ -115,9 +115,10 @@ public class BlockValidationService {
             }
         }
 
-        // Determine validity: ignore ALREADY_KNOWN and PARENT_NOT_FOUND as non-fatal
+        // Determine validity: ignore ALREADY_KNOWN as non-fatal. Missing parent is fatal;
+        // the periodic peer sync fetches blocks sequentially instead of storing orphans.
         boolean valid = violations.stream()
-                .filter(v -> !"ALREADY_KNOWN".equals(v) && !"PARENT_NOT_FOUND".equals(v))
+                .filter(v -> !"ALREADY_KNOWN".equals(v))
                 .findAny()
                 .isEmpty();
 

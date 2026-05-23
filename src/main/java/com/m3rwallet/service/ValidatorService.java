@@ -32,6 +32,7 @@ public class ValidatorService {
     private final ValidatorWeightRepository validatorWeightRepository;
     private final SlashEventRepository slashEventRepository;
     private final NodeIdentityService nodeIdentityService;
+    private final ValidatorSyncService validatorSyncService;
 
     @Value("${app.validator.minimum-stake:1000}")
     private long minimumStake;
@@ -47,6 +48,9 @@ public class ValidatorService {
 
     @Value("${app.blockchain.network:mainnet}")
     private String defaultNetwork;
+
+    @Value("${app.validator.selection-mode:round-robin}")
+    private String selectionMode;
 
     /**
      * Calculate weight for a validator using formula:
@@ -72,6 +76,16 @@ public class ValidatorService {
         List<Validator> validators = validatorRepository.findByNetworkAndStatus(network, Validator.ValidatorStatus.ACTIVE);
         if (validators == null || validators.isEmpty()) {
             throw new RuntimeException("No active validators for network: " + network);
+        }
+
+        validators.sort(Comparator.comparing(Validator::getAddress));
+
+        if (!"weighted".equalsIgnoreCase(selectionMode)) {
+            int idx = Math.floorMod(slotNumber, validators.size());
+            Validator chosen = validators.get(idx);
+            log.info("[SLOT_SELECT] slot={} network={} selected={} mode=round-robin validatorCount={}",
+                    slotNumber, network, chosen.getAddress(), validators.size());
+            return chosen;
         }
 
         List<Double> weights = new ArrayList<>();
@@ -211,9 +225,16 @@ public class ValidatorService {
                 .status(Validator.ValidatorStatus.ACTIVE)
                 .registeredAt(System.currentTimeMillis())
                 .build();
-        validatorRepository.save(v);
+        Validator saved = validatorRepository.save(v);
         log.info("[REGISTER] Validator registered {} on {} stake={}", address, network, stakeAmount);
-        return v;
+        try {
+            if (validatorSyncService != null) {
+                validatorSyncService.broadcastValidatorRegistration(saved);
+            }
+        } catch (Exception e) {
+            log.warn("Validator sync failed (non-fatal): {}", e.getMessage());
+        }
+        return saved;
     }
 
     /**
@@ -289,7 +310,7 @@ public class ValidatorService {
     @jakarta.annotation.PostConstruct
     public void autoRegisterIfEnabled() {
         if (!validatorEnabled) return;
-        String validatorAddress = nodeIdentityService.getAddressOrUnknown();
+        String validatorAddress = nodeIdentityService.getNodeAddress();
         if (validatorAddress == null || validatorAddress.isBlank()) return;
         if ("unknown".equals(validatorAddress)) return;
         try {

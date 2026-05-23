@@ -585,6 +585,51 @@ public class WalletController {
         }
     }
 
+    @PostMapping("/{network}/validator/receive")
+    @ResponseBody
+    public ResponseEntity<?> receiveValidator(
+            @PathVariable String network,
+            @RequestBody Map<String, Object> body) {
+        try {
+            String source = String.valueOf(body.getOrDefault("source", ""));
+            if (!"peer-sync".equals(source)) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("error", "invalid source"));
+            }
+
+            String address = body.get("address") == null ? null : String.valueOf(body.get("address"));
+            String stakeStr = String.valueOf(body.getOrDefault("stakeAmount", "10000"));
+            if (address == null || address.isBlank()) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("error", "address required"));
+            }
+
+            boolean exists = validatorRepo.findByAddressAndNetwork(address, network).isPresent();
+            if (exists) {
+                return ResponseEntity.ok(Map.of("status", "ALREADY_EXISTS"));
+            }
+
+            Validator v = new Validator();
+            v.setAddress(address);
+            v.setNetwork(network);
+            v.setStakedAmount(new BigDecimal(stakeStr));
+            v.setReliabilityScoreScaled(0L);
+            v.setStatus(Validator.ValidatorStatus.ACTIVE);
+            v.setRegisteredAt(System.currentTimeMillis());
+            v.setTotalProposals(0L);
+            v.setSuccessfulProposals(0L);
+            v.setCorruptedProposals(0L);
+            validatorRepo.save(v);
+
+            log.info("[VALIDATOR SYNC] Received validator: {} on {}", address, network);
+            return ResponseEntity.ok(Map.of("status", "REGISTERED", "address", address));
+        } catch (Exception e) {
+            log.error("Error receiving validator: {}", e.getMessage());
+            return ResponseEntity.internalServerError()
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
     @GetMapping("/{network}/validator/{address}")
     @ResponseBody
     public ResponseEntity<?> getValidator(

@@ -26,6 +26,7 @@ public class BlockProposalService {
 
     private final MempoolService mempoolService;
     private final ValidatorService validatorService;
+    private final NodeIdentityService nodeIdentityService;
     private final BlockRepository blockRepository;
     private final BlockTransactionRepository blockTransactionRepository;
     private final String defaultNetwork;
@@ -33,12 +34,14 @@ public class BlockProposalService {
 
     public BlockProposalService(MempoolService mempoolService,
                                 ValidatorService validatorService,
+                                NodeIdentityService nodeIdentityService,
                                 BlockRepository blockRepository,
                                 BlockTransactionRepository blockTransactionRepository,
                                 @Value("${app.blockchain.network:mainnet}") String defaultNetwork,
                                 @Value("${app.blockchain.max-block-size:5000}") int maxBlockSize) {
         this.mempoolService = mempoolService;
         this.validatorService = validatorService;
+        this.nodeIdentityService = nodeIdentityService;
         this.blockRepository = blockRepository;
         this.blockTransactionRepository = blockTransactionRepository;
         this.defaultNetwork = defaultNetwork;
@@ -86,7 +89,14 @@ public class BlockProposalService {
         block.setNonce(nonce);
         block.setIsFinalized(false);
         block.setReceivedAt(System.currentTimeMillis());
-        block.setProposerSignature("UNSIGNED");
+        try {
+            byte[] headerBytes = block.serializeForSigning();
+            byte[] sig = nodeIdentityService.signData(headerBytes);
+            block.setProposerSignature(bytesToHex(sig));
+        } catch (Exception e) {
+            log.warn("Could not sign block: {}", e.getMessage());
+            block.setProposerSignature("UNSIGNED");
+        }
 
         String blockHash = computeBlockHash(block);
         block.setBlockHash(blockHash);

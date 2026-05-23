@@ -62,6 +62,10 @@ app:
     address: ${M3R_VALIDATOR_ADDRESS:}
     minimum-stake: 1000
     slot-duration-ms: 15000
+    startup-proposal-delay-ms: 15000
+    selection-mode: round-robin
+    sync-interval-ms: 30000
+    sync-initial-delay-ms: 10000
     unbonding-period-blocks: 100
     reputation-decay-rate: 0.999
     initial-reputation: 0.0
@@ -81,3 +85,5 @@ app:
     self-url: ${NODE_SELF_URL:http://localhost:3000}
     bootstrap-peers: ${NODE_BOOTSTRAP_PEERS:}
     private-key: ${M3R_NODE_PRIVATE_KEY:}
+    block-sync-interval-ms: 10000
+    block-sync-initial-delay-ms: 8000

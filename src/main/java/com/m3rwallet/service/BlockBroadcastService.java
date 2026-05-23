@@ -5,10 +5,12 @@ import com.m3rwallet.entity.Block;
 import com.m3rwallet.entity.BlockTransaction;
 import com.m3rwallet.repository.BlockRepository;
 import com.m3rwallet.repository.BlockTransactionRepository;
+import com.m3rwallet.scheduler.BlockScheduler;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -34,6 +36,10 @@ public class BlockBroadcastService {
 
     @Autowired(required = false)
     private BlockValidationService blockValidationService;
+
+    @Autowired(required = false)
+    @Lazy
+    private BlockScheduler blockScheduler;
 
     private final BlockRepository blockRepo;
     private final BlockTransactionRepository blockTxRepo;
@@ -203,6 +209,13 @@ public class BlockBroadcastService {
             block.setReceivedAt(System.currentTimeMillis());
 
             blockRepo.save(block);
+            try {
+                if (blockScheduler != null) {
+                    blockScheduler.markSlotFilled(block.getSlotNumber());
+                }
+            } catch (Exception e) {
+                log.warn("Could not mark slot filled for received block {}: {}", blockHeight, e.getMessage());
+            }
 
             List<String> confirmedTxHashes = extractTxHashes(payload.get("transactions"));
             saveBlockTransactions(blockHeight, confirmedTxHashes);

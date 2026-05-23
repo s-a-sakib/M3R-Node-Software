@@ -20,6 +20,9 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
+import java.util.Set;
+import java.util.Collections;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
@@ -35,14 +38,16 @@ public class BlockScheduler {
     private final PeerSyncService peerSyncService;
     private final MempoolService mempoolService;
     private final FeeDistributionService feeDistributionService;
+    private final NodeIdentityService nodeIdentityService;
     private final boolean validatorEnabled;
-    private final String thisNodeAddress;
+    private final String selfUrl;
     private final String network;
     private final long slotDurationMs;
     private final int maxBlockSize;
 
     private final AtomicBoolean isProposing = new AtomicBoolean(false);
     private final AtomicLong lastProposedSlot = new AtomicLong(-1L);
+    private final Set<Long> filledSlots = Collections.newSetFromMap(new ConcurrentHashMap<>());
 
     @Autowired(required = false)
     @Lazy
@@ -56,6 +61,7 @@ public class BlockScheduler {
                           PeerSyncService peerSyncService,
                           NodeIdentityService nodeIdentityService,
                           @Value("${app.validator.enabled:false}") boolean validatorEnabled,
+                          @Value("${app.node.self-url:http://localhost:3000}") String selfUrl,
                           @Value("${app.blockchain.network:mainnet}") String network,
                           @Value("${app.validator.slot-duration-ms:15000}") long slotDurationMs,
                           @Value("${app.blockchain.max-block-size:5000}") int maxBlockSize) {
@@ -65,8 +71,9 @@ public class BlockScheduler {
         this.feeDistributionService = feeDistributionService;
         this.slashDetectionService = slashDetectionService;
         this.peerSyncService = peerSyncService;
+        this.nodeIdentityService = nodeIdentityService;
         this.validatorEnabled = validatorEnabled;
-        this.thisNodeAddress = nodeIdentityService.getAddressOrUnknown();
+        this.selfUrl = selfUrl;
         this.network = network;
         this.slotDurationMs = slotDurationMs;
         this.maxBlockSize = maxBlockSize;
@@ -82,10 +89,17 @@ public class BlockScheduler {
         }
     }
 
-    @Scheduled(fixedDelayString = "${app.validator.slot-duration-ms:15000}")
+    @Scheduled(fixedDelayString = "${app.validator.slot-duration-ms:15000}",
+            initialDelayString = "${app.validator.startup-proposal-delay-ms:15000}")
     public void proposeBlockForCurrentSlot() {
         if (!validatorEnabled) return;
         long slotNumber = System.currentTimeMillis() / slotDurationMs;
+        if (filledSlots.contains(slotNumber)) {
+            log.debug("[SLOT {}] Already filled by peer, skipping", slotNumber);
+            filledSlots.remove(slotNumber);
+            return;
+        }
+        filledSlots.removeIf(s -> s < slotNumber - 10);
         log.info("[SLOT {}] Scheduler heartbeat", slotNumber);
         if (slotNumber == lastProposedSlot.get()) return;
         if (isProposing.getAndSet(true)) return;
@@ -93,7 +107,10 @@ public class BlockScheduler {
             Validator selected = validatorService.selectValidatorForSlot(slotNumber, network);
             double weight = (selected == null) ? 0.0 : validatorService.calculateWeight(selected);
             String selAddr = (selected == null) ? "<none>" : selected.getAddress();
+            String thisNodeAddress = nodeIdentityService.getNodeAddress();
             log.info("[SLOT {}] Selected validator: {} (weight: {})", slotNumber, selAddr, weight);
+            log.debug("[SLOT {}] Selected: {} | This node: {} | selfUrl: {}",
+                    slotNumber, selAddr, thisNodeAddress, selfUrl);
             if (selected == null || !selAddr.equals(thisNodeAddress)) {
                 log.info("[SLOT {}] Not our turn. Skipping.", slotNumber);
                 return;
@@ -151,6 +168,11 @@ public class BlockScheduler {
         } finally {
             isProposing.set(false);
         }
+    }
+
+    public void markSlotFilled(long slotNumber) {
+        filledSlots.add(slotNumber);
+        log.debug("[SLOT {}] Marked as filled by peer", slotNumber);
     }
 
     @Scheduled(fixedRate = 60000)
