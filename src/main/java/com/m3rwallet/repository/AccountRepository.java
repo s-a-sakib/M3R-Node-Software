@@ -17,6 +17,8 @@ public interface AccountRepository extends JpaRepository<Account, Long> {
     @Query("SELECT a FROM Account a WHERE a.network = :network")
     List<Account> findByNetwork(@Param("network") String network);
 
+    org.springframework.data.domain.Page<Account> findByNetwork(String network, org.springframework.data.domain.Pageable pageable);
+
     @Query(value = "SELECT * FROM accounts WHERE network = :network AND address = :address FOR UPDATE", nativeQuery = true)
     Optional<Account> findForUpdate(@Param("network") String network, @Param("address") String address);
 }

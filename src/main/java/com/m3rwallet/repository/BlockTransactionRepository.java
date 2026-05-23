@@ -15,4 +15,6 @@ public interface BlockTransactionRepository extends JpaRepository<BlockTransacti
     List<BlockTransaction> findBySenderAddress(String senderAddress);
 
     List<BlockTransaction> findByBroadcasterAddress(String broadcasterAddress);
+
+    void deleteByBlock(com.m3rwallet.entity.Block block);
 }

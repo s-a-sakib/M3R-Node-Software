@@ -212,6 +212,15 @@ public class BlockProposalService {
 
     @Transactional
     public Block finalizeBlock(Block block, String network) {
+        try {
+            if (block.getFeeDistributed() != null && block.getFeeDistributed()) {
+                log.info("Fees already distributed for block {}", block.getBlockHeight());
+            } else {
+                block.setFeeDistributed(true);
+            }
+        } catch (Exception e) {
+            log.warn("Could not set feeDistributed flag: {}", e.getMessage());
+        }
         block.setIsFinalized(true);
         block.setFinalizedAt(System.currentTimeMillis());
         // update tx statuses
@@ -226,6 +235,17 @@ public class BlockProposalService {
         validatorService.recordSuccessfulProposal(block.getProposerAddress(), network);
         log.info("Block {} finalized. Proposer: {}. Txs: {}", saved.getBlockHeight(), saved.getProposerAddress(), saved.getTxCount());
         return saved;
+    }
+
+    @Transactional
+    public void deleteBlock(Block block) {
+        try {
+            blockTransactionRepository.deleteByBlock(block);
+            blockRepository.delete(block);
+            log.info("Deleted unfinalized block {}", block.getBlockHeight());
+        } catch (Exception e) {
+            log.error("Could not delete block {}: {}", block.getBlockHeight(), e.getMessage());
+        }
     }
 
     // --- helpers ---

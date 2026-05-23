@@ -57,6 +57,12 @@ public class ValidatorSyncService {
 
     public void broadcastValidatorRegistration(Validator v) {
         try {
+            long now = System.currentTimeMillis();
+            if (v == null) return;
+            if (now - v.getRegisteredAt() > 5000) {
+                log.debug("Skipping sync — validator registered long ago: {}", v.getAddress());
+                return;
+            }
             List<String> peers = consensusProperties.getPeers();
             if (peers == null || peers.isEmpty() || v == null) {
                 return;

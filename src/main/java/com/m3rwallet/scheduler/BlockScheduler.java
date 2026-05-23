@@ -11,6 +11,7 @@ import com.m3rwallet.service.FeeDistributionService;
 import com.m3rwallet.service.MempoolService;
 import com.m3rwallet.service.NodeIdentityService;
 import com.m3rwallet.service.ValidatorService;
+import com.m3rwallet.service.BlockConsensusVoteService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -39,9 +40,11 @@ public class BlockScheduler {
     private final MempoolService mempoolService;
     private final FeeDistributionService feeDistributionService;
     private final NodeIdentityService nodeIdentityService;
+    private final BlockConsensusVoteService blockConsensusVoteService;
     private final boolean validatorEnabled;
     private final String selfUrl;
     private final String network;
+    private final boolean skipEmptyBlocks;
     private final long slotDurationMs;
     private final int maxBlockSize;
 
@@ -60,9 +63,11 @@ public class BlockScheduler {
                           SlashDetectionService slashDetectionService,
                           PeerSyncService peerSyncService,
                           NodeIdentityService nodeIdentityService,
+                          BlockConsensusVoteService blockConsensusVoteService,
                           @Value("${app.validator.enabled:false}") boolean validatorEnabled,
                           @Value("${app.node.self-url:http://localhost:3000}") String selfUrl,
                           @Value("${app.blockchain.network:mainnet}") String network,
+                          @Value("${app.blockchain.skip-empty-blocks:true}") boolean skipEmptyBlocks,
                           @Value("${app.validator.slot-duration-ms:15000}") long slotDurationMs,
                           @Value("${app.blockchain.max-block-size:5000}") int maxBlockSize) {
         this.validatorService = validatorService;
@@ -72,9 +77,11 @@ public class BlockScheduler {
         this.slashDetectionService = slashDetectionService;
         this.peerSyncService = peerSyncService;
         this.nodeIdentityService = nodeIdentityService;
+        this.blockConsensusVoteService = blockConsensusVoteService;
         this.validatorEnabled = validatorEnabled;
         this.selfUrl = selfUrl;
         this.network = network;
+        this.skipEmptyBlocks = skipEmptyBlocks;
         this.slotDurationMs = slotDurationMs;
         this.maxBlockSize = maxBlockSize;
     }
@@ -131,32 +138,66 @@ public class BlockScheduler {
             List<MempoolService.PendingTx> pending = mempoolService.getPendingTransactions(network, maxBlockSize);
             log.info("[SLOT {}] Collected {} pending txs from mempool", slotNumber, pending.size());
 
+            if (pending.isEmpty() && skipEmptyBlocks) {
+                log.debug("[SLOT {}] Mempool empty. Skipping.", slotNumber);
+                return;
+            }
+
             Block block = blockProposalService.buildBlock(slotNumber, selected, pending, network);
             List<BlockTransaction> txs = blockProposalService.createBlockTransactions(pending, block);
             Block saved = blockProposalService.saveBlock(block, txs);
-            Block finalized = blockProposalService.finalizeBlock(saved, network);
-            // === BLOCK BROADCAST TO CONSENSUS PEERS ===
+            // DO NOT finalize yet — broadcast for voting first
+            Block finalized = null;
             try {
-                if (blockBroadcastService != null) {
-                    blockBroadcastService.broadcastBlock(finalized, network);
+                log.info("[SLOT {}] Broadcasting block {} for consensus voting", slotNumber, saved.getBlockHeight());
+                boolean consensusReached = false;
+                try {
+                    consensusReached = blockConsensusVoteService.collectVotes(saved, network);
+                } catch (Exception e) {
+                    log.warn("[SLOT {}] Vote collection failed: {}", slotNumber, e.getMessage());
+                }
+                if (consensusReached) {
+                    try {
+                        finalized = blockProposalService.finalizeBlock(saved, network);
+                        try {
+                            feeDistributionService.distributeConsensusFees(finalized, network);
+                        } catch (Exception e) {
+                            log.warn("[SLOT {}] Fee distribution failed: {}", slotNumber, e.getMessage());
+                        }
+                        if (blockBroadcastService != null) {
+                            blockBroadcastService.broadcastFinalizedBlock(finalized, network);
+                        }
+                        log.info("[SLOT {}] Block {} finalized with 2/3 consensus", slotNumber, finalized.getBlockHeight());
+                    } catch (Exception e) {
+                        log.warn("[SLOT {}] Finalize after consensus failed: {}", slotNumber, e.getMessage());
+                    }
+                } else {
+                    try {
+                        blockProposalService.deleteBlock(saved);
+                    } catch (Exception e) {
+                        log.warn("[SLOT {}] Could not delete rejected block {}: {}", slotNumber, saved.getBlockHeight(), e.getMessage());
+                    }
+                    log.warn("[SLOT {}] Block {} rejected — no 2/3 consensus", slotNumber, saved.getBlockHeight());
                 }
             } catch (Exception e) {
-                log.warn("[SLOT {}] Block broadcast failed (non-fatal): {}",
-                        slotNumber, e.getMessage());
+                log.warn("[SLOT {}] Consensus broadcast failed (non-fatal): {}", slotNumber, e.getMessage());
             }
-            // === END BLOCK BROADCAST ===
-            // TODO Day 6: Replace immediate finalize with weighted consensus
-            feeDistributionService.distributeConsensusFees(finalized, network);
 
             
 
-            mempoolService.removeTransactions(pending.stream().map(MempoolService.PendingTx::txHash).collect(Collectors.toList()));
-            lastProposedSlot.set(slotNumber);
-            log.info("[SLOT {}] Block {} proposed and finalized. Hash: {}", slotNumber, finalized.getBlockHeight(), finalized.getBlockHash());
+            if (finalized != null) {
+                mempoolService.removeTransactions(pending.stream().map(MempoolService.PendingTx::txHash).collect(Collectors.toList()));
+                lastProposedSlot.set(slotNumber);
+                log.info("[SLOT {}] Block {} proposed and finalized. Hash: {}", slotNumber, finalized.getBlockHeight(), finalized.getBlockHash());
+            } else {
+                log.info("[SLOT {}] Block proposal did not finalize (no consensus)", slotNumber);
+            }
 
             List<String> violations = new java.util.ArrayList<>();
             try {
-                violations = slashDetectionService.detectInvalidProposal(finalized);
+                if (finalized != null) {
+                    violations = slashDetectionService.detectInvalidProposal(finalized);
+                }
             } catch (Exception e) {
                 log.warn("Invalid proposal detection failed: {}", e.getMessage());
             }

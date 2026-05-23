@@ -69,6 +69,7 @@ app:
     unbonding-period-blocks: 100
     reputation-decay-rate: 0.999
     initial-reputation: 0.0
+    require-balance: false
 
   fee-policy:
     broadcast-fee-bps: 2000
@@ -79,6 +80,7 @@ app:
   blockchain:
     network: mainnet
     max-block-size: 5000
+    skip-empty-blocks: true
     finality-confirmations: 2
 
   node:

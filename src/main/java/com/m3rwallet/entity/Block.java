@@ -103,6 +103,10 @@ public class Block {
     @Column(name = "received_at")
     private Long receivedAt;
 
+    /** Whether consensus fees have been distributed for this block */
+    @Column(name = "fee_distributed", nullable = false)
+    private Boolean feeDistributed = Boolean.FALSE;
+
     /** Database insertion time; managed by Hibernate. */
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)

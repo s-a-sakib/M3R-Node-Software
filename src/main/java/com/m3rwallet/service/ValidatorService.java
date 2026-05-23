@@ -6,6 +6,7 @@ import com.m3rwallet.entity.ValidatorWeight;
 import com.m3rwallet.repository.SlashEventRepository;
 import com.m3rwallet.repository.ValidatorRepository;
 import com.m3rwallet.repository.ValidatorWeightRepository;
+import com.m3rwallet.repository.AccountRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -33,6 +34,7 @@ public class ValidatorService {
     private final SlashEventRepository slashEventRepository;
     private final NodeIdentityService nodeIdentityService;
     private final ValidatorSyncService validatorSyncService;
+    private final AccountRepository accountRepository;
 
     @Value("${app.validator.minimum-stake:1000}")
     private long minimumStake;
@@ -48,6 +50,9 @@ public class ValidatorService {
 
     @Value("${app.blockchain.network:mainnet}")
     private String defaultNetwork;
+
+    @Value("${app.validator.require-balance:false}")
+    private boolean requireBalance;
 
     @Value("${app.validator.selection-mode:round-robin}")
     private String selectionMode;
@@ -212,6 +217,27 @@ public class ValidatorService {
         }
         if (stakeAmount.compareTo(BigDecimal.valueOf(minimumStake)) < 0) {
             throw new IllegalArgumentException("Stake below minimum: " + stakeAmount);
+        }
+
+        if (requireBalance) {
+            try {
+                java.util.Optional<com.m3rwallet.entity.Account> account = accountRepository.findByNetworkAndAddress(network, address);
+                java.math.BigDecimal availableBalance = account.map(a -> new java.math.BigDecimal(a.getBalance())).orElse(java.math.BigDecimal.ZERO);
+                if (availableBalance.compareTo(stakeAmount) < 0) {
+                    throw new IllegalArgumentException("Insufficient balance to stake. Available: " + availableBalance + " Required: " + stakeAmount);
+                }
+                if (account.isPresent()) {
+                    com.m3rwallet.entity.Account acc = account.get();
+                    java.math.BigDecimal newBalance = new java.math.BigDecimal(acc.getBalance()).subtract(stakeAmount);
+                    acc.setBalance(newBalance.toString());
+                    accountRepository.save(acc);
+                    log.info("Locked {} stake from account {}", stakeAmount, address);
+                }
+            } catch (Exception e) {
+                throw new IllegalArgumentException("Stake registration failed: " + e.getMessage());
+            }
+        } else {
+            log.warn("Stake balance check DISABLED (app.validator.require-balance=false)");
         }
 
         Validator v = Validator.builder()

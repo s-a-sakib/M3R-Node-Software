@@ -10,6 +10,7 @@ import com.m3rwallet.config.ConsensusProperties;
 import com.m3rwallet.repository.BlockRepository;
 import com.m3rwallet.repository.BlockTransactionRepository;
 import com.m3rwallet.repository.ValidatorRepository;
+import com.m3rwallet.repository.AccountRepository;
 import com.m3rwallet.service.BlockBroadcastService;
 import com.m3rwallet.service.FeeDistributionService;
 import com.m3rwallet.service.MempoolService;
@@ -55,6 +56,9 @@ public class WalletController {
 
     @Autowired
     private ValidatorRepository validatorRepo;
+
+    @Autowired
+    private AccountRepository accountRepository;
 
     @Autowired(required = false)
     private ValidatorService validatorService;
@@ -485,6 +489,36 @@ public class WalletController {
         }
     }
 
+    @GetMapping("/{network}/accounts")
+    @ResponseBody
+    public ResponseEntity<?> getAccounts(
+            @PathVariable String network,
+            @RequestParam(defaultValue = "0")  int page,
+            @RequestParam(defaultValue = "20") int size) {
+        try {
+            Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "id"));
+            org.springframework.data.domain.Page<Account> accounts = accountRepository.findByNetwork(network, pageable);
+            List<Map<String, Object>> result = accounts.stream().map(a -> {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("id", a.getId());
+                m.put("address", a.getAddress());
+                m.put("balance", a.getBalance());
+                m.put("nonce", a.getNonce());
+                m.put("network", a.getNetwork());
+                return m;
+            }).collect(Collectors.toList());
+            return ResponseEntity.ok(Map.of(
+                    "content", result,
+                    "totalElements", accounts.getTotalElements(),
+                    "totalPages", accounts.getTotalPages(),
+                    "currentPage", page,
+                    "size", size
+            ));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
     @GetMapping("/{network}/blocks/{height}")
     @ResponseBody
     public ResponseEntity<?> getBlock(
@@ -551,6 +585,71 @@ public class WalletController {
         }
     }
 
+    // Called by proposer to get this node's vote on a block
+    @PostMapping("/{network}/blocks/vote")
+    @ResponseBody
+    public ResponseEntity<?> voteOnBlock(
+            @PathVariable String network,
+            @RequestBody Map<String, Object> payload) {
+        try {
+            Long blockHeight = getLong(payload, "blockHeight");
+            String blockHash = (String) payload.get("blockHash");
+            String proposerAddress = (String) payload.get("proposerAddress");
+            String merkleRoot = (String) payload.get("merkleRoot");
+            Long slotNumber = getLong(payload, "slotNumber");
+            Long txCount = getLong(payload, "txCount");
+            Long timestamp = getLong(payload, "timestamp");
+
+            String myAddress = nodeIdentityService != null ? nodeIdentityService.getNodeAddress() : "unknown";
+
+            // Validation checks
+            List<String> violations = new java.util.ArrayList<>();
+
+            // Check 1: Block height must be next expected
+            Optional<Block> latest = blockRepo.findTopByNetworkOrderByBlockHeightDesc(network);
+            long expectedHeight = latest.map(b -> b.getBlockHeight() + 1).orElse(1L);
+            if (blockHeight == null) {
+                violations.add("MISSING_HEIGHT");
+            } else if (blockHeight < expectedHeight - 1) {
+                violations.add("HEIGHT_TOO_LOW");
+            }
+
+            // Check 2: Proposer must be active validator
+            boolean proposerValid = proposerAddress != null && validatorRepo.findByAddressAndNetwork(proposerAddress, network)
+                    .map(v -> v.getStatus() == com.m3rwallet.entity.Validator.ValidatorStatus.ACTIVE).orElse(false);
+            if (!proposerValid) {
+                violations.add("INVALID_PROPOSER");
+            }
+
+            // Check 3: Not already a block at this height
+            if (blockHeight != null && blockRepo.existsById(blockHeight)) {
+                violations.add("HEIGHT_ALREADY_EXISTS");
+            }
+
+            // Check 4: Timestamp sanity
+            if (timestamp != null) {
+                long diff = Math.abs(System.currentTimeMillis() - timestamp);
+                if (diff > 30_000) violations.add("TIMESTAMP_SKEW");
+            }
+
+            boolean vote = violations.isEmpty();
+
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("vote", vote);
+            result.put("voterAddress", myAddress);
+            result.put("blockHeight", blockHeight);
+            result.put("blockHash", blockHash);
+            result.put("violations", violations);
+            result.put("reason", vote ? "VALID" : String.join(",", violations));
+
+            log.info("[BLOCK VOTE] Block {} → vote: {} ({})", blockHeight, vote ? "YES" : "NO", vote ? "valid" : violations);
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            log.error("Vote error: {}", e.getMessage());
+            return ResponseEntity.internalServerError().body(Map.of("vote", false, "reason", "INTERNAL_ERROR"));
+        }
+    }
+
     @PostMapping("/{network}/validator/register")
     @ResponseBody
     public ResponseEntity<?> registerValidator(
@@ -604,9 +703,14 @@ public class WalletController {
                         .body(Map.of("error", "address required"));
             }
 
-            boolean exists = validatorRepo.findByAddressAndNetwork(address, network).isPresent();
-            if (exists) {
-                return ResponseEntity.ok(Map.of("status", "ALREADY_EXISTS"));
+            java.util.Optional<Validator> existing = validatorRepo.findByAddressAndNetwork(address, network);
+            if (existing.isPresent()) {
+                log.debug("Validator {} already exists on {}", address, network);
+                return ResponseEntity.ok(Map.of(
+                        "status", "ALREADY_EXISTS",
+                        "address", address,
+                        "currentStatus", existing.get().getStatus().toString()
+                ));
             }
 
             Validator v = new Validator();
@@ -738,6 +842,18 @@ public class WalletController {
         } catch (Exception e) {
             log.warn("Failed to build node status: {}", e.getMessage());
             return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    // Helper
+    private Long getLong(Map<String, Object> m, String key) {
+        try {
+            Object v = m.get(key);
+            if (v == null) return null;
+            if (v instanceof Number) return ((Number) v).longValue();
+            return Long.parseLong(v.toString());
+        } catch (Exception e) {
+            return null;
         }
     }
 }

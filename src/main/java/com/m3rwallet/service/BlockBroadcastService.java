@@ -142,6 +142,25 @@ public class BlockBroadcastService {
         return payload;
     }
 
+    public void broadcastFinalizedBlock(Block block, String network) {
+        try {
+            if (block == null) return;
+            Map<String, Object> payload = buildBlockPayload(block);
+            payload.put("finalized", true);
+            for (String peer : peerUrls) {
+                try {
+                    String url = peer + "/" + network + "/blocks/receive";
+                    restTemplate.postForEntity(url, payload, Map.class);
+                    log.info("Finalized block {} sent to {}", block.getBlockHeight(), peer);
+                } catch (Exception e) {
+                    log.warn("Broadcast to {} failed: {}", peer, e.getMessage());
+                }
+            }
+        } catch (Exception e) {
+            log.warn("broadcastFinalizedBlock failed: {}", e.getMessage());
+        }
+    }
+
     @Transactional
     public Map<String, Object> receiveBlock(Map<String, Object> payload, String network) {
         try {
@@ -204,11 +223,19 @@ public class BlockBroadcastService {
             block.setMerkleRoot(toStringValue(payload.get("merkleRoot")));
             block.setStateRoot(toStringValue(payload.get("stateRoot")));
             block.setValidatorSetHash(toStringValue(payload.get("validatorSetHash")));
-            block.setIsFinalized(true);
-            block.setFinalizedAt(defaultLong(toLong(payload.get("finalizedAt")), System.currentTimeMillis()));
+            Boolean isFinalized = Boolean.TRUE.equals(payload.get("finalized")) || Boolean.TRUE.equals(payload.get("isFinalized"));
+            if (isFinalized) {
+                block.setIsFinalized(true);
+                block.setFinalizedAt(defaultLong(toLong(payload.get("finalizedAt")), System.currentTimeMillis()));
+                // mark fees as already distributed (proposer will have done distribution)
+                try { block.setFeeDistributed(true); } catch (Exception ignored) {}
+            } else {
+                block.setIsFinalized(false);
+            }
             block.setReceivedAt(System.currentTimeMillis());
 
             blockRepo.save(block);
+            try { if (isFinalized) blockRepo.save(block); } catch (Exception ignored) {}
             try {
                 if (blockScheduler != null) {
                     blockScheduler.markSlotFilled(block.getSlotNumber());

@@ -16,6 +16,9 @@ public class MempoolService {
 
     private final ConcurrentHashMap<String, PendingTx> pendingTxs = new ConcurrentHashMap<>();
 
+    @org.springframework.beans.factory.annotation.Value("${app.blockchain.network:mainnet}")
+    private String nodeNetwork;
+
     public record PendingTx(
             String txHash,
             String senderAddress,
@@ -31,7 +34,17 @@ public class MempoolService {
     ) {}
 
     public boolean addTransaction(PendingTx tx) {
-        if (tx == null || tx.txHash() == null) return false;
+        try {
+            if (tx == null || tx.txHash() == null) return false;
+            if (tx.network() == null) return false;
+            if (!nodeNetwork.equalsIgnoreCase(tx.network())) {
+                log.debug("Rejecting tx {} — wrong network {} (node is {})", tx.txHash(), tx.network(), nodeNetwork);
+                return false;
+            }
+        } catch (Exception e) {
+            log.warn("Mempool addTransaction validation failed: {}", e.getMessage());
+            return false;
+        }
         PendingTx prev = pendingTxs.putIfAbsent(tx.txHash(), tx);
         if (prev != null) {
             return false;
