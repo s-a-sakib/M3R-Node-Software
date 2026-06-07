@@ -124,6 +124,11 @@ public class WalletService {
 
     @Transactional
     public String executeTransaction(String network, String rawTxHex, String pubKeyCompressedHex) {
+        return executeTransaction(network, rawTxHex, pubKeyCompressedHex, null);
+    }
+
+    @Transactional
+    public String executeTransaction(String network, String rawTxHex, String pubKeyCompressedHex, String broadcasterAddress) {
         TxDecoder.ParsedTx tx = parseAndVerifyTransaction(rawTxHex, pubKeyCompressedHex);
         String txHash = computeTxHash(rawTxHex);
 
@@ -193,7 +198,9 @@ public class WalletService {
         // === BLOCKCHAIN: Add to mempool + record broadcast fee ===
         try {
             if (mempoolService != null) {
-                String broadcaster = getThisNodeAddress();
+                String broadcaster = (broadcasterAddress == null || broadcasterAddress.isBlank())
+                        ? getThisNodeAddress()
+                        : broadcasterAddress;
 
                 MempoolService.PendingTx pendingTx =
                         new MempoolService.PendingTx(

@@ -197,7 +197,20 @@ public class BlockValidationService {
     private List<String> getList(Map<String, Object> m, String key) {
         try {
             Object v = m.get(key);
-            if (v instanceof List<?>) return (List<String>) v;
+            if (v instanceof List<?> rawList) {
+                List<String> hashes = new ArrayList<>();
+                for (Object item : rawList) {
+                    if (item instanceof Map<?, ?> txMap) {
+                        Object txHash = txMap.get("txHash");
+                        if (txHash != null && !String.valueOf(txHash).isBlank()) {
+                            hashes.add(String.valueOf(txHash));
+                        }
+                    } else if (item != null && !String.valueOf(item).isBlank()) {
+                        hashes.add(String.valueOf(item));
+                    }
+                }
+                return hashes;
+            }
             return List.of();
         } catch (Exception e) {
             return List.of();

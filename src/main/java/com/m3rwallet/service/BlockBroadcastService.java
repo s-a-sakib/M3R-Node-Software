@@ -16,6 +16,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestTemplate;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -113,9 +114,9 @@ public class BlockBroadcastService {
     public Map<String, Object> buildBlockPayload(Block block) {
         Map<String, Object> payload = new LinkedHashMap<>();
         try {
-            List<String> txHashes = blockTxRepo.findByBlockHeight(block.getBlockHeight()).stream()
-                    .map(BlockTransaction::getTxHash)
-                    .filter(Objects::nonNull)
+            List<Map<String, Object>> txs = blockTxRepo.findByBlockHeight(block.getBlockHeight()).stream()
+                    .filter(tx -> tx.getTxHash() != null)
+                    .map(this::toPayloadTransaction)
                     .collect(Collectors.toList());
 
             payload.put("blockHeight", block.getBlockHeight());
@@ -135,7 +136,8 @@ public class BlockBroadcastService {
             payload.put("network", block.getNetwork());
             payload.put("isFinalized", true);
             payload.put("finalizedAt", block.getFinalizedAt());
-            payload.put("transactions", txHashes);
+            payload.put("feeDistributed", Boolean.TRUE.equals(block.getFeeDistributed()));
+            payload.put("transactions", txs);
         } catch (Exception e) {
             log.warn("Could not build block payload for {}: {}", block.getBlockHeight(), e.getMessage());
         }
@@ -224,11 +226,15 @@ public class BlockBroadcastService {
             block.setStateRoot(toStringValue(payload.get("stateRoot")));
             block.setValidatorSetHash(toStringValue(payload.get("validatorSetHash")));
             Boolean isFinalized = Boolean.TRUE.equals(payload.get("finalized")) || Boolean.TRUE.equals(payload.get("isFinalized"));
+            Boolean feeDistributedFlag = Boolean.TRUE.equals(payload.get("feeDistributed"));
             if (isFinalized) {
                 block.setIsFinalized(true);
                 block.setFinalizedAt(defaultLong(toLong(payload.get("finalizedAt")), System.currentTimeMillis()));
-                // mark fees as already distributed (proposer will have done distribution)
-                try { block.setFeeDistributed(true); } catch (Exception ignored) {}
+                try {
+                    if (feeDistributedFlag) {
+                        block.setFeeDistributed(true);
+                    }
+                } catch (Exception ignored) {}
             } else {
                 block.setIsFinalized(false);
             }
@@ -244,8 +250,12 @@ public class BlockBroadcastService {
                 log.warn("Could not mark slot filled for received block {}: {}", blockHeight, e.getMessage());
             }
 
-            List<String> confirmedTxHashes = extractTxHashes(payload.get("transactions"));
-            saveBlockTransactions(blockHeight, confirmedTxHashes);
+            List<BlockTransaction> confirmedTxs = extractBlockTransactions(payload.get("transactions"), blockHeight);
+            List<String> confirmedTxHashes = confirmedTxs.stream()
+                    .map(BlockTransaction::getTxHash)
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.toList());
+            saveBlockTransactions(confirmedTxs);
             clearConfirmedTransactions(blockHeight, confirmedTxHashes);
 
             log.info("Received block {} from peer", blockHeight);
@@ -256,31 +266,27 @@ public class BlockBroadcastService {
         }
     }
 
-    private void saveBlockTransactions(Long blockHeight, List<String> txHashes) {
+    private void saveBlockTransactions(List<BlockTransaction> receivedTxs) {
         try {
-            if (txHashes == null || txHashes.isEmpty()) {
+            if (receivedTxs == null || receivedTxs.isEmpty()) {
                 return;
             }
             List<BlockTransaction> txs = new ArrayList<>();
-            int index = 0;
-            for (String txHash : txHashes) {
+            for (BlockTransaction tx : receivedTxs) {
+                String txHash = tx.getTxHash();
                 if (txHash == null || txHash.isBlank() || blockTxRepo.findByTxHash(txHash) != null) {
-                    index++;
                     continue;
                 }
-                BlockTransaction tx = new BlockTransaction();
-                tx.setBlockHeight(blockHeight);
-                tx.setTxHash(txHash);
-                tx.setTxIndex(index);
-                tx.setStatus(BlockTransaction.TxStatus.CONFIRMED);
+                if (tx.getStatus() == null) {
+                    tx.setStatus(BlockTransaction.TxStatus.CONFIRMED);
+                }
                 txs.add(tx);
-                index++;
             }
             if (!txs.isEmpty()) {
                 blockTxRepo.saveAll(txs);
             }
         } catch (Exception e) {
-            log.warn("Could not save received block transactions for block {}: {}", blockHeight, e.getMessage());
+            log.warn("Could not save received block transactions: {}", e.getMessage());
         }
     }
 
@@ -302,12 +308,89 @@ public class BlockBroadcastService {
                 return List.of();
             }
             return rawList.stream()
-                    .map(this::toStringValue)
+                    .map(item -> {
+                        if (item instanceof Map<?, ?> txMap) {
+                            return toStringValue(txMap.get("txHash"));
+                        }
+                        return toStringValue(item);
+                    })
                     .filter(s -> s != null && !s.isBlank())
                     .collect(Collectors.toList());
         } catch (Exception e) {
             log.warn("Could not extract tx hashes: {}", e.getMessage());
             return List.of();
+        }
+    }
+
+    private List<BlockTransaction> extractBlockTransactions(Object rawTransactions, Long blockHeight) {
+        try {
+            if (!(rawTransactions instanceof List<?> rawList)) {
+                return List.of();
+            }
+            List<BlockTransaction> txs = new ArrayList<>();
+            int index = 0;
+            for (Object item : rawList) {
+                BlockTransaction tx = new BlockTransaction();
+                tx.setBlockHeight(blockHeight);
+                tx.setTxIndex(index);
+                tx.setStatus(BlockTransaction.TxStatus.CONFIRMED);
+                if (item instanceof Map<?, ?> txMap) {
+                    tx.setTxHash(toStringValue(txMap.get("txHash")));
+                    tx.setSenderAddress(toStringValue(txMap.get("sender")));
+                    tx.setRecipientAddress(toStringValue(txMap.get("recipient")));
+                    tx.setValue(toBigDecimal(txMap.get("value")));
+                    tx.setTotalFee(toLong(txMap.get("totalFee")));
+                    tx.setBroadcastFee(toLong(txMap.get("broadcastFee")));
+                    tx.setConsensusFee(toLong(txMap.get("consensusFee")));
+                    tx.setBroadcasterAddress(toStringValue(txMap.get("broadcasterAddress")));
+                    tx.setNonce(toLong(txMap.get("nonce")));
+                    tx.setTimestamp(toLong(txMap.get("timestamp")));
+                    tx.setTxSignature(toStringValue(txMap.get("txSignature")));
+                    tx.setPubKeyCompressed(toStringValue(txMap.get("pubKeyCompressed")));
+                } else {
+                    tx.setTxHash(toStringValue(item));
+                }
+                if (tx.getTxHash() != null && !tx.getTxHash().isBlank()) {
+                    txs.add(tx);
+                }
+                index++;
+            }
+            return txs;
+        } catch (Exception e) {
+            log.warn("Could not extract block transactions: {}", e.getMessage());
+            return List.of();
+        }
+    }
+
+    private Map<String, Object> toPayloadTransaction(BlockTransaction tx) {
+        Map<String, Object> item = new LinkedHashMap<>();
+        item.put("txHash", tx.getTxHash());
+        item.put("sender", tx.getSenderAddress());
+        item.put("recipient", tx.getRecipientAddress());
+        item.put("value", tx.getValue());
+        item.put("totalFee", tx.getTotalFee());
+        item.put("broadcastFee", tx.getBroadcastFee());
+        item.put("consensusFee", tx.getConsensusFee());
+        item.put("broadcasterAddress", tx.getBroadcasterAddress());
+        item.put("nonce", tx.getNonce());
+        item.put("timestamp", tx.getTimestamp());
+        item.put("txSignature", tx.getTxSignature());
+        item.put("pubKeyCompressed", tx.getPubKeyCompressed());
+        item.put("status", tx.getStatus());
+        return item;
+    }
+
+    private BigDecimal toBigDecimal(Object value) {
+        try {
+            if (value == null) {
+                return null;
+            }
+            if (value instanceof BigDecimal bd) {
+                return bd;
+            }
+            return new BigDecimal(String.valueOf(value));
+        } catch (Exception e) {
+            return null;
         }
     }
 

@@ -194,7 +194,7 @@ public class AdminDashboardController {
                     .map(account -> {
                         Map<String, Object> m = new LinkedHashMap<>();
                         m.put("network", account.getNetwork());
-                        m.put("address", account.getAddress());
+                        m.put("address", adminViewUtil.address(account.getAddress()));
                         m.put("displayAddress", adminViewUtil.address(account.getAddress()));
                         m.put("balance", account.getBalance());
                         m.put("displayBalance", adminViewUtil.amount(account.getBalance()));
@@ -249,11 +249,11 @@ public class AdminDashboardController {
                         Map<String, Object> m = new LinkedHashMap<>();
                         m.put("network", escrow.getNetwork());
                         m.put("escrowId", escrow.getEscrowId());
-                        m.put("buyer", escrow.getBuyer());
+                        m.put("buyer", adminViewUtil.address(escrow.getBuyer()));
                         m.put("buyerDisplay", adminViewUtil.address(escrow.getBuyer()));
-                        m.put("seller", escrow.getSeller());
+                        m.put("seller", adminViewUtil.address(escrow.getSeller()));
                         m.put("sellerDisplay", adminViewUtil.address(escrow.getSeller()));
-                        m.put("arbiter", escrow.getArbiter());
+                        m.put("arbiter", adminViewUtil.address(escrow.getArbiter()));
                         m.put("arbiterDisplay", adminViewUtil.address(escrow.getArbiter()));
                         m.put("amount", escrow.getAmount());
                         m.put("displayAmount", adminViewUtil.amount(escrow.getAmount()));

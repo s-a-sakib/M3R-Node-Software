@@ -49,6 +49,10 @@ public class FeeDistributionService {
      */
     public FeeBreakdown calculateFees(int txSizeBytes) {
         long totalFee = baseFee + (txSizeBytes * perByteFee);
+        return splitTotalFee(totalFee);
+    }
+
+    public FeeBreakdown splitTotalFee(long totalFee) {
         long broadcastFee = (totalFee * broadcastFeeBps) / 10000;
         long consensusFee = totalFee - broadcastFee;
         return new FeeBreakdown(totalFee, broadcastFee, consensusFee);

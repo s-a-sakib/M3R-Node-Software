@@ -30,4 +30,9 @@ public interface TxLedgerRepository extends JpaRepository<TxLedger, Long> {
             @Param("network") String network,
             @Param("txHash") String txHash,
             @Param("addr") String addr);
+
+    @Query("SELECT l FROM TxLedger l WHERE l.network = :network AND l.txHash = :txHash ORDER BY l.id ASC")
+    List<TxLedger> findByNetworkAndTxHash(
+            @Param("network") String network,
+            @Param("txHash") String txHash);
 }

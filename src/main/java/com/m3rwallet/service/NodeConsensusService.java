@@ -47,6 +47,7 @@ public class NodeConsensusService {
         List<String> peers = normalizedPeers();
         int totalNodes = peers.size() + 1;
         int quorum = quorum(totalNodes);
+        request.setBroadcasterAddress(nodeIdentityService.getAddressOrUnknown());
 
         String txHash;
         try {
@@ -139,7 +140,11 @@ public class NodeConsensusService {
         }
 
         try {
-            String executedHash = walletService.executeTransaction(network, request.getRawTxHex(), request.getPubKeyCompressedHex());
+            String executedHash = walletService.executeTransaction(
+                    network,
+                    request.getRawTxHex(),
+                    request.getPubKeyCompressedHex(),
+                    request.getBroadcasterAddress());
             return TxResponse.builder()
                     .status("ACCEPTED")
                     .txHash(executedHash)
