@@ -19,4 +19,25 @@ public class TxResponse {
 
     @JsonProperty("message")
     private String message;
+
+    @JsonProperty("yesVotes")
+    private Integer yesVotes;
+
+    @JsonProperty("totalPeers")
+    private Integer totalPeers;
+
+    @JsonProperty("approvedWeight")
+    private Double approvedWeight;
+
+    @JsonProperty("totalWeight")
+    private Double totalWeight;
+
+    @JsonProperty("weightRatio")
+    private Double weightRatio;
+
+    @JsonProperty("consensusType")
+    private String consensusType;
+
+    @JsonProperty("validatorAddress")
+    private String validatorAddress;
 }

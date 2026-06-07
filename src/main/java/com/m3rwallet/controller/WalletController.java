@@ -2,18 +2,40 @@ package com.m3rwallet.controller;
 
 import com.m3rwallet.dto.*;
 import com.m3rwallet.entity.Account;
+import com.m3rwallet.entity.Block;
 import com.m3rwallet.entity.TxLedger;
+import com.m3rwallet.entity.Validator;
+import com.m3rwallet.entity.Validator.ValidatorStatus;
 import com.m3rwallet.config.ConsensusProperties;
+import com.m3rwallet.repository.BlockRepository;
+import com.m3rwallet.repository.BlockTransactionRepository;
+import com.m3rwallet.repository.ValidatorRepository;
+import com.m3rwallet.repository.AccountRepository;
+import com.m3rwallet.service.BlockBroadcastService;
+import com.m3rwallet.service.FeeDistributionService;
+import com.m3rwallet.service.MempoolService;
+import com.m3rwallet.service.NodeIdentityService;
 import com.m3rwallet.service.NodeConsensusService;
 import com.m3rwallet.service.TxLedgerService;
+import com.m3rwallet.service.ValidatorService;
 import com.m3rwallet.service.WalletService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.math.BigDecimal;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 @RestController
@@ -24,6 +46,32 @@ public class WalletController {
     private final TxLedgerService txLedgerService;
     private final NodeConsensusService nodeConsensusService;
     private final ConsensusProperties consensusProperties;
+    private final NodeIdentityService nodeIdentityService;
+
+    @Autowired
+    private BlockRepository blockRepo;
+
+    @Autowired
+    private BlockTransactionRepository blockTxRepo;
+
+    @Autowired
+    private ValidatorRepository validatorRepo;
+
+    @Autowired
+    private AccountRepository accountRepository;
+
+    @Autowired(required = false)
+    private ValidatorService validatorService;
+
+    @Autowired(required = false)
+    private MempoolService mempoolService;
+
+    @Autowired(required = false)
+    private FeeDistributionService feeDistributionService;
+
+    @Autowired(required = false)
+    @Lazy
+    private BlockBroadcastService blockBroadcastService;
 
     /**
      * Factory method to create network-specific routers
@@ -151,6 +199,7 @@ public class WalletController {
             return ResponseEntity.ok(TxResponse.builder()
                     .status("ACCEPTED")
                     .txHash(txHash)
+                    .validatorAddress(nodeIdentityService.getAddressOrUnknown())
                     .message("OK")
                     .build());
         } catch (IllegalArgumentException e) {
@@ -398,5 +447,413 @@ public class WalletController {
                 .status("OK")
                 .message("M3R Node Server (" + network + ") running on MySQL Database")
                 .build());
+    }
+
+    @GetMapping("/{network}/blocks")
+    @ResponseBody
+    public ResponseEntity<?> getBlocks(
+            @PathVariable String network,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        try {
+            Pageable pageable = PageRequest.of(
+                    page, size,
+                    Sort.by(Sort.Direction.DESC, "blockHeight"));
+            Page<Block> blocks = blockRepo.findByNetwork(network, pageable);
+
+            List<Map<String, Object>> result = blocks.stream()
+                    .map(b -> {
+                        Map<String, Object> m = new LinkedHashMap<>();
+                        m.put("blockHeight",     b.getBlockHeight());
+                        m.put("blockHash",       b.getBlockHash());
+                        m.put("slotNumber",      b.getSlotNumber());
+                        m.put("proposerAddress", b.getProposerAddress());
+                        m.put("txCount",         b.getTxCount());
+                        m.put("isFinalized",     b.getIsFinalized());
+                        m.put("timestamp",       b.getTimestamp());
+                        m.put("network",         b.getNetwork());
+                        return m;
+                    })
+                    .collect(Collectors.toList());
+
+            return ResponseEntity.ok(Map.of(
+                    "blocks",        result,
+                    "totalElements", blocks.getTotalElements(),
+                    "totalPages",    blocks.getTotalPages(),
+                    "currentPage",   page
+            ));
+        } catch (Exception e) {
+            log.error("Error fetching blocks: {}", e.getMessage());
+            return ResponseEntity.internalServerError()
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @GetMapping("/{network}/accounts")
+    @ResponseBody
+    public ResponseEntity<?> getAccounts(
+            @PathVariable String network,
+            @RequestParam(defaultValue = "0")  int page,
+            @RequestParam(defaultValue = "20") int size) {
+        try {
+            Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "id"));
+            org.springframework.data.domain.Page<Account> accounts = accountRepository.findByNetwork(network, pageable);
+            List<Map<String, Object>> result = accounts.stream().map(a -> {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("id", a.getId());
+                m.put("address", a.getAddress());
+                m.put("balance", a.getBalance());
+                m.put("nonce", a.getNonce());
+                m.put("network", a.getNetwork());
+                return m;
+            }).collect(Collectors.toList());
+            return ResponseEntity.ok(Map.of(
+                    "content", result,
+                    "totalElements", accounts.getTotalElements(),
+                    "totalPages", accounts.getTotalPages(),
+                    "currentPage", page,
+                    "size", size
+            ));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @GetMapping("/{network}/blocks/{height}")
+    @ResponseBody
+    public ResponseEntity<?> getBlock(
+            @PathVariable String network,
+            @PathVariable Long height) {
+        try {
+            Optional<Block> blockOpt = blockRepo.findByBlockHeightAndNetwork(height, network);
+            if (blockOpt.isEmpty())
+                return ResponseEntity.notFound().build();
+
+            Block b = blockOpt.get();
+            List<Map<String, Object>> txList =
+                    blockTxRepo.findByBlockHeight(height).stream()
+                            .map(tx -> {
+                                Map<String, Object> t = new LinkedHashMap<>();
+                                t.put("txHash",          tx.getTxHash());
+                                t.put("sender",          tx.getSenderAddress());
+                                t.put("recipient",       tx.getRecipientAddress());
+                                t.put("value",           tx.getValue());
+                                t.put("totalFee",        tx.getTotalFee());
+                                t.put("broadcastFee",    tx.getBroadcastFee());
+                                t.put("consensusFee",    tx.getConsensusFee());
+                                t.put("status",          tx.getStatus());
+                                return t;
+                            })
+                            .collect(Collectors.toList());
+
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("blockHeight",     b.getBlockHeight());
+            result.put("blockHash",       b.getBlockHash());
+            result.put("parentBlockHash", b.getParentBlockHash());
+            result.put("slotNumber",      b.getSlotNumber());
+            result.put("proposerAddress", b.getProposerAddress());
+            result.put("proposerWeight",  b.getProposerWeight());
+            result.put("merkleRoot",      b.getMerkleRoot());
+            result.put("txCount",         b.getTxCount());
+            result.put("isFinalized",     b.getIsFinalized());
+            result.put("timestamp",       b.getTimestamp());
+            result.put("network",         b.getNetwork());
+            result.put("transactions",    txList);
+
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError()
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/{network}/blocks/receive")
+    @ResponseBody
+    public ResponseEntity<?> receiveBlock(
+            @PathVariable String network,
+            @RequestBody Map<String, Object> payload) {
+        try {
+            if (blockBroadcastService == null) {
+                return ResponseEntity.ok(Map.of("status", "DISABLED"));
+            }
+            Map<String, Object> result = blockBroadcastService.receiveBlock(payload, network);
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            log.error("Error receiving block: {}", e.getMessage());
+            return ResponseEntity.internalServerError()
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    // Called by proposer to get this node's vote on a block
+    @PostMapping("/{network}/blocks/vote")
+    @ResponseBody
+    public ResponseEntity<?> voteOnBlock(
+            @PathVariable String network,
+            @RequestBody Map<String, Object> payload) {
+        try {
+            Long blockHeight = getLong(payload, "blockHeight");
+            String blockHash = (String) payload.get("blockHash");
+            String proposerAddress = (String) payload.get("proposerAddress");
+            String merkleRoot = (String) payload.get("merkleRoot");
+            Long slotNumber = getLong(payload, "slotNumber");
+            Long txCount = getLong(payload, "txCount");
+            Long timestamp = getLong(payload, "timestamp");
+
+            String myAddress = nodeIdentityService != null ? nodeIdentityService.getNodeAddress() : "unknown";
+
+            // Validation checks
+            List<String> violations = new java.util.ArrayList<>();
+
+            // Check 1: Block height must be next expected
+            Optional<Block> latest = blockRepo.findTopByNetworkOrderByBlockHeightDesc(network);
+            long expectedHeight = latest.map(b -> b.getBlockHeight() + 1).orElse(1L);
+            if (blockHeight == null) {
+                violations.add("MISSING_HEIGHT");
+            } else if (blockHeight < expectedHeight - 1) {
+                violations.add("HEIGHT_TOO_LOW");
+            }
+
+            // Check 2: Proposer must be active validator
+            boolean proposerValid = proposerAddress != null && validatorRepo.findByAddressAndNetwork(proposerAddress, network)
+                    .map(v -> v.getStatus() == com.m3rwallet.entity.Validator.ValidatorStatus.ACTIVE).orElse(false);
+            if (!proposerValid) {
+                violations.add("INVALID_PROPOSER");
+            }
+
+            // Check 3: Not already a block at this height
+            if (blockHeight != null && blockRepo.existsById(blockHeight)) {
+                violations.add("HEIGHT_ALREADY_EXISTS");
+            }
+
+            // Check 4: Timestamp sanity
+            if (timestamp != null) {
+                long diff = Math.abs(System.currentTimeMillis() - timestamp);
+                if (diff > 30_000) violations.add("TIMESTAMP_SKEW");
+            }
+
+            boolean vote = violations.isEmpty();
+
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("vote", vote);
+            result.put("voterAddress", myAddress);
+            result.put("blockHeight", blockHeight);
+            result.put("blockHash", blockHash);
+            result.put("violations", violations);
+            result.put("reason", vote ? "VALID" : String.join(",", violations));
+
+            log.info("[BLOCK VOTE] Block {} → vote: {} ({})", blockHeight, vote ? "YES" : "NO", vote ? "valid" : violations);
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            log.error("Vote error: {}", e.getMessage());
+            return ResponseEntity.internalServerError().body(Map.of("vote", false, "reason", "INTERNAL_ERROR"));
+        }
+    }
+
+    @PostMapping("/{network}/validator/register")
+    @ResponseBody
+    public ResponseEntity<?> registerValidator(
+            @PathVariable String network,
+            @RequestBody Map<String, String> body) {
+        try {
+            String address   = body.get("address");
+            String stakeStr  = body.get("stakeAmount");
+
+            if (address == null || stakeStr == null)
+                return ResponseEntity.badRequest()
+                        .body(Map.of("error",
+                                "address and stakeAmount required"));
+
+            if (validatorService == null)
+                return ResponseEntity.internalServerError()
+                        .body(Map.of("error", "ValidatorService unavailable"));
+
+            BigDecimal stake = new BigDecimal(stakeStr);
+            Validator v = validatorService
+                    .registerValidator(address, network, stake);
+
+            return ResponseEntity.ok(Map.of(
+                    "message",      "Validator registered",
+                    "address",      v.getAddress(),
+                    "status",       v.getStatus(),
+                    "stakedAmount", v.getStakedAmount()
+            ));
+        } catch (Exception e) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/{network}/validator/receive")
+    @ResponseBody
+    public ResponseEntity<?> receiveValidator(
+            @PathVariable String network,
+            @RequestBody Map<String, Object> body) {
+        try {
+            String source = String.valueOf(body.getOrDefault("source", ""));
+            if (!"peer-sync".equals(source)) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("error", "invalid source"));
+            }
+
+            String address = body.get("address") == null ? null : String.valueOf(body.get("address"));
+            String stakeStr = String.valueOf(body.getOrDefault("stakeAmount", "10000"));
+            if (address == null || address.isBlank()) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("error", "address required"));
+            }
+
+            java.util.Optional<Validator> existing = validatorRepo.findByAddressAndNetwork(address, network);
+            if (existing.isPresent()) {
+                log.debug("Validator {} already exists on {}", address, network);
+                return ResponseEntity.ok(Map.of(
+                        "status", "ALREADY_EXISTS",
+                        "address", address,
+                        "currentStatus", existing.get().getStatus().toString()
+                ));
+            }
+
+            Validator v = new Validator();
+            v.setAddress(address);
+            v.setNetwork(network);
+            v.setStakedAmount(new BigDecimal(stakeStr));
+            v.setReliabilityScoreScaled(0L);
+            v.setStatus(Validator.ValidatorStatus.ACTIVE);
+            v.setRegisteredAt(System.currentTimeMillis());
+            v.setTotalProposals(0L);
+            v.setSuccessfulProposals(0L);
+            v.setCorruptedProposals(0L);
+            validatorRepo.save(v);
+
+            log.info("[VALIDATOR SYNC] Received validator: {} on {}", address, network);
+            return ResponseEntity.ok(Map.of("status", "REGISTERED", "address", address));
+        } catch (Exception e) {
+            log.error("Error receiving validator: {}", e.getMessage());
+            return ResponseEntity.internalServerError()
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @GetMapping("/{network}/validator/{address}")
+    @ResponseBody
+    public ResponseEntity<?> getValidator(
+            @PathVariable String network,
+            @PathVariable String address) {
+        try {
+            return validatorRepo
+                    .findByAddressAndNetwork(address, network)
+                    .map(v -> ResponseEntity.ok(Map.of(
+                            "address",             v.getAddress(),
+                            "stakedAmount",        v.getStakedAmount(),
+                            "reliabilityScore",    v.getReliabilityScore(),
+                            "weight",              validatorService != null
+                                                   ? validatorService.calculateWeight(v)
+                                                   : 0.0,
+                            "status",              v.getStatus(),
+                            "totalProposals",      v.getTotalProposals(),
+                            "successfulProposals", v.getSuccessfulProposals(),
+                            "registeredAt",        v.getRegisteredAt()
+                    )))
+                    .orElse(ResponseEntity.notFound().build());
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError()
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @GetMapping("/{network}/mempool")
+    @ResponseBody
+    public ResponseEntity<?> getMempoolStatus(
+            @PathVariable String network) {
+        try {
+            if (mempoolService == null)
+                return ResponseEntity.ok(
+                        Map.of("pendingCount", 0, "transactions", List.of()));
+
+            int size = mempoolService.size(network);
+            List<Map<String, Object>> txList =
+                    mempoolService.getPendingTransactions(network, 50)
+                            .stream()
+                            .map(tx -> {
+                                Map<String, Object> m = new LinkedHashMap<>();
+                                m.put("txHash",     tx.txHash());
+                                m.put("sender",     tx.senderAddress());
+                                m.put("recipient",  tx.recipientAddress());
+                                m.put("fee",        tx.fee());
+                                m.put("receivedAt", tx.receivedAt());
+                                return m;
+                            })
+                            .collect(Collectors.toList());
+
+            return ResponseEntity.ok(Map.of(
+                    "pendingCount", size,
+                    "transactions", txList
+            ));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError()
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @GetMapping("/{network}/stats")
+    @ResponseBody
+    public ResponseEntity<?> getNetworkStats(
+            @PathVariable String network) {
+        try {
+            long totalBlocks = blockRepo
+                    .countByNetworkAndIsFinalized(network, true);
+            long totalValidators = validatorRepo
+                    .findByNetworkAndStatus(network,
+                            ValidatorStatus.ACTIVE).size();
+            int mempoolSize = mempoolService != null
+                    ? mempoolService.size(network) : 0;
+
+            return ResponseEntity.ok(Map.of(
+                    "network",         network,
+                    "finalizedBlocks", totalBlocks,
+                    "activeValidators",totalValidators,
+                    "pendingTxs",      mempoolSize
+            ));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError()
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @GetMapping("/{network}/node/status")
+    @ResponseBody
+    public ResponseEntity<?> getNodeStatus(@PathVariable String network) {
+        try {
+            int mempoolSize = mempoolService != null ? mempoolService.size(network) : 0;
+            long latestHeight = blockRepo.findTopByNetworkOrderByBlockHeightDesc(network)
+                    .map(b -> b.getBlockHeight()).orElse(0L);
+
+            Map<String, Object> status = new LinkedHashMap<>();
+            status.put("network", network);
+            status.put("nodeAddress", nodeIdentityService.getAddressOrUnknown());
+            status.put("publicKeyCompressed", nodeIdentityService.getPublicKeyCompressedHex());
+            status.put("privateKeyBacked", nodeIdentityService.isPrivateKeyBacked());
+            status.put("mempoolPending", mempoolSize);
+            status.put("pendingTxs", mempoolSize);
+            status.put("latestBlockHeight", latestHeight);
+            status.put("status", "OK");
+
+            return ResponseEntity.ok(status);
+        } catch (Exception e) {
+            log.warn("Failed to build node status: {}", e.getMessage());
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    // Helper
+    private Long getLong(Map<String, Object> m, String key) {
+        try {
+            Object v = m.get(key);
+            if (v == null) return null;
+            if (v instanceof Number) return ((Number) v).longValue();
+            return Long.parseLong(v.toString());
+        } catch (Exception e) {
+            return null;
+        }
     }
 }

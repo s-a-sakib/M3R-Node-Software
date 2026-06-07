@@ -16,4 +16,10 @@ public interface TransactionRepository extends JpaRepository<Transaction, Long> 
 
     @Query("SELECT t FROM Transaction t WHERE t.network = :network ORDER BY t.createdAt DESC")
     List<Transaction> findByNetwork(@Param("network") String network);
+
+    boolean existsByHash(String hash);
+
+    default boolean existsByTxHash(String txHash) {
+        return existsByHash(txHash);
+    }
 }

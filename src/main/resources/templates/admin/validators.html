@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>M3R Node Admin — Validators</title>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Sora:wght@300;400;600&display=swap" rel="stylesheet">
+  <style>
+    :root{--bg:#07080f;--surface:#0d0f1a;--panel:#111422;--border:#1e2235;--accent:#00d4aa;--accent2:#5b8df6;--warn:#f0a500;--danger:#e84560;--text:#e2e6f3;--muted:#5a6180;--mono:'JetBrains Mono',monospace;--ui:'Sora',sans-serif}
+    body{margin:0;font-family:var(--ui);background:var(--bg);color:var(--text)}
+    .sidebar{width:220px;background:var(--surface);border-right:1px solid var(--border);position:fixed;inset:0;padding:20px}
+    .main{margin-left:220px;padding:20px}
+    .topbar{height:64px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 20px}
+    .stats{display:flex;gap:12px;margin:16px 0}
+    .stat-card{flex:1;background:var(--panel);border:1px solid var(--border);padding:12px;border-radius:10px}
+    .panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:14px}
+    table{width:100%;border-collapse:collapse}
+    thead th{font-size:11px;color:var(--muted);padding:10px;border-bottom:1px solid var(--border);text-align:left}
+    tbody td{padding:12px;border-bottom:1px solid var(--border)}
+    .mono{font-family:var(--mono)}.muted{color:var(--muted)}.teal{color:var(--accent)}
+    .rep-bar{height:10px;background:#0b0c12;border-radius:6px;overflow:hidden;border:1px solid var(--border)}
+    .rep-fill{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2))}
+    .pill-active{background:rgba(0,212,170,.08);color:var(--accent);padding:4px 8px;border-radius:10px}
+    .pill-jailed{background:rgba(240,165,0,.08);color:var(--warn);padding:4px 8px;border-radius:10px}
+    .pill-slashed{background:rgba(232,69,96,.08);color:var(--danger);padding:4px 8px;border-radius:10px}
+  </style>
+</head>
+<body>
+  <aside class="sidebar">
+    <div style="font-family:var(--mono);color:var(--accent);font-size:20px">M3R <span style="color:var(--text);font-weight:400;margin-left:6px">NODE ADMIN</span></div>
+    <nav style="margin-top:18px;color:var(--muted);font-size:13px"><div><a href="/admin">Dashboard</a></div><div><a href="/admin/validators" style="color:var(--accent)">Validators</a></div></nav>
+  </aside>
+
+  <main class="main">
+    <header class="topbar"><div style="font-weight:600">Validator Registry</div><div class="mono muted">Auto-refresh every 15s</div></header>
+
+    <div class="stats">
+      <div class="stat-card"><div class="muted">Active Validators</div><div id="activeValidators" class="mono" style="font-size:22px">---</div></div>
+      <div class="stat-card"><div class="muted">Jailed Validators</div><div id="jailedValidators" class="mono" style="font-size:22px">---</div></div>
+      <div class="stat-card"><div class="muted">Network</div><div id="networkName" class="mono" style="font-size:22px">mainnet</div></div>
+      <div class="stat-card"><div class="muted">Finalized Blocks</div><div id="finalizedBlocks" class="mono" style="font-size:22px">---</div></div>
+    </div>
+
+    <div class="panel">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div style="font-weight:600">Validator Registry</div><div class="muted">Auto-refresh every 15s</div></div>
+      <div style="overflow:auto">
+        <table>
+          <thead><tr><th>ADDRESS</th><th>NETWORK</th><th>STAKE</th><th>REPUTATION</th><th>WEIGHT</th><th>STATUS</th><th>PROPOSALS</th><th>SINCE</th></tr></thead>
+          <tbody id="validators-tbody"><tr><td colspan="8" class="muted">Loading...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    const API_STATS='/admin/api/blockchain-stats';
+    const API_VALS='/admin/api/validators';
+    function truncAddr(a){ if(!a) return ''; return a.slice(0,12)+'...'+a.slice(-6); }
+    function fmt(n){ return n==null?'—':Number(n).toLocaleString(); }
+
+    async function load(){ try{ const s=await (await fetch(API_STATS)).json(); document.getElementById('activeValidators').textContent=s.activeValidators??'—'; document.getElementById('finalizedBlocks').textContent=s.finalizedBlocks??'—'; document.getElementById('networkName').textContent='mainnet'; }catch(e){console.warn(e);} try{ const res=await fetch(API_VALS); if(!res.ok) throw new Error('vals'); const j=await res.json(); renderValidators(j.validators||j); }catch(e){console.warn(e); document.getElementById('validators-tbody').innerHTML='<tr><td colspan="8" class="muted">ERR</td></tr>'; } }
+
+    function renderValidators(list){ const tb=document.getElementById('validators-tbody'); tb.innerHTML=''; if(!list||list.length===0){ tb.innerHTML='<tr><td colspan="8" class="muted">No validators registered. Use the API to register.</td></tr>'; return; } for(const v of list){ const repPct = Math.round((v.reliabilityScore||0)*100); const fill=`<div class="rep-bar"><div class="rep-fill" style="width:${repPct}%"></div></div>`; const status = v.status==='ACTIVE'?'<span class="pill-active">ACTIVE</span>':v.status==='JAILED'?'<span class="pill-jailed">JAILED</span>':'<span class="pill-slashed">SLASHED</span>'; const tr=document.createElement('tr'); tr.innerHTML=`<td class="mono">${truncAddr(v.address)}</td><td><span style="background:${v.network==='mainnet'?'rgba(0,212,170,.06)':'rgba(91,141,246,.06)'};color:${v.network==='mainnet'?'var(--accent)':'var(--accent2)'};padding:4px 8px;border-radius:8px;font-family:var(--mono)">${v.network}</span></td><td style="text-align:right;font-family:var(--mono)">${fmt(v.stakedAmount)}</td><td>${fill}<div class="mono muted" style="margin-top:6px">${repPct}%</div></td><td class="mono">${(v.weight||0).toFixed?Number(v.weight).toFixed(4):v.weight||'0.0000'}</td><td>${status}</td><td>${(v.successfulProposals||0)}/${(v.totalProposals||0)}</td><td class="muted">${v.registeredAt?new Date(v.registeredAt).toLocaleDateString():'-'}</td>`; tb.appendChild(tr);} }
+
+    load(); setInterval(load,15000);
+  </script>
+</body>
+</html>

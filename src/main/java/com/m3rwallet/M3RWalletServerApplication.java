@@ -8,9 +8,11 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.transaction.annotation.EnableTransactionManagement;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 @SpringBootApplication
 @EnableTransactionManagement
+@EnableScheduling
 @RequiredArgsConstructor
 @Slf4j
 public class M3RWalletServerApplication {
@@ -30,6 +32,7 @@ public class M3RWalletServerApplication {
             walletService.initializeNetworks();
             log.info("========================================");
             log.info("Genesis initialization complete!");
+            log.info("Node Dashboard: http://localhost:3000/");
             log.info("Admin Dashboard: http://localhost:3000/admin");
             log.info("========================================");
         } catch (Exception e) {
