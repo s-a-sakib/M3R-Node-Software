@@ -16,6 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigInteger;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Service for fee calculation and distribution (broadcast + consensus shares).
@@ -89,34 +90,98 @@ public class FeeDistributionService {
     }
 
     /**
-     * Distribute consensus fees to proposer for a block.
+     * Distribute all finalized block rewards once: broadcast fee per included
+     * transaction and consensus fee to the block proposer.
+     */
+    @Transactional
+    public void distributeBlockFees(com.m3rwallet.entity.Block block, String network) {
+        if (block == null || Boolean.TRUE.equals(block.getFeeDistributed())) {
+            return;
+        }
+
+        distributeBlockFeesIgnoringFlag(block, network);
+    }
+
+    @Transactional
+    public void reconcileFinalizedBlockFees(com.m3rwallet.entity.Block block, String network) {
+        if (block == null || !Boolean.TRUE.equals(block.getIsFinalized())) {
+            return;
+        }
+        distributeBlockFeesIgnoringFlag(block, network);
+    }
+
+    private void distributeBlockFeesIgnoringFlag(com.m3rwallet.entity.Block block, String network) {
+        List<BlockTransaction> txs = blockTransactionRepository.findByBlockHeight(block.getBlockHeight());
+        distributeBroadcastFees(block, network, txs);
+        distributeConsensusFees(block, network, txs);
+
+        block.setFeeDistributed(true);
+        log.info("Block {} fees distributed", block.getBlockHeight());
+    }
+
+    /**
+     * Backward-compatible wrapper for older callers.
      */
     @Transactional
     public void distributeConsensusFees(com.m3rwallet.entity.Block block, String network) {
-        List<BlockTransaction> txs = blockTransactionRepository.findByBlockHeight(block.getBlockHeight());
+        distributeBlockFees(block, network);
+    }
+
+    private void distributeBroadcastFees(com.m3rwallet.entity.Block block, String network, List<BlockTransaction> txs) {
+        if (txs == null || txs.isEmpty()) {
+            return;
+        }
+        for (BlockTransaction bt : txs) {
+            if (bt.getTxHash() == null || bt.getTxHash().isBlank()
+                    || bt.getBroadcasterAddress() == null || bt.getBroadcasterAddress().isBlank()
+                    || bt.getBroadcastFee() == null || bt.getBroadcastFee() <= 0L) {
+                continue;
+            }
+
+            Optional<BroadcasterEarning> existing = broadcasterEarningRepository
+                    .findByTxHashAndNetwork(bt.getTxHash(), network);
+            if (existing.isPresent()) {
+                BroadcasterEarning earning = existing.get();
+                if (earning.getBlockHeight() == null) {
+                    earning.setBlockHeight(block.getBlockHeight());
+                    broadcasterEarningRepository.save(earning);
+                }
+                continue;
+            }
+
+            creditAccount(network, bt.getBroadcasterAddress(), bt.getBroadcastFee());
+            BroadcasterEarning earning = BroadcasterEarning.builder()
+                    .txHash(bt.getTxHash())
+                    .broadcasterAddress(bt.getBroadcasterAddress())
+                    .network(network)
+                    .broadcastFee(bt.getBroadcastFee())
+                    .blockHeight(block.getBlockHeight())
+                    .build();
+            broadcasterEarningRepository.save(earning);
+            log.info("Broadcast fee {} credited to {} for tx {} in block {}",
+                    bt.getBroadcastFee(), bt.getBroadcasterAddress(), bt.getTxHash(), block.getBlockHeight());
+        }
+    }
+
+    private void distributeConsensusFees(com.m3rwallet.entity.Block block, String network, List<BlockTransaction> txs) {
+        if (proposerEarningRepository.findByBlockHeightAndNetwork(block.getBlockHeight(), network).isPresent()) {
+            return;
+        }
+
         long totalConsensusFee = 0L;
         int txCount = 0;
-        for (BlockTransaction bt : txs) {
+        for (BlockTransaction bt : txs == null ? List.<BlockTransaction>of() : txs) {
             if (bt.getConsensusFee() != null) {
                 totalConsensusFee += bt.getConsensusFee();
                 txCount++;
             }
         }
+        if (totalConsensusFee <= 0L) {
+            return;
+        }
 
         String proposer = block.getProposerAddress();
-        Account acct = accountRepository.findByNetworkAndAddress(network, proposer).orElseGet(() -> {
-            Account a = new Account();
-            a.setNetwork(network);
-            a.setAddress(proposer);
-            a.setBalance("0");
-            a.setNonce(0L);
-            return a;
-        });
-
-        BigInteger bal = new BigInteger(acct.getBalance());
-        bal = bal.add(BigInteger.valueOf(totalConsensusFee));
-        acct.setBalance(bal.toString());
-        accountRepository.save(acct);
+        creditAccount(network, proposer, totalConsensusFee);
 
         ProposerEarning pe = ProposerEarning.builder()
                 .proposerAddress(proposer)
@@ -128,6 +193,25 @@ public class FeeDistributionService {
         proposerEarningRepository.save(pe);
 
         log.info("Consensus fee {} distributed to proposer {} for block {}", totalConsensusFee, proposer, block.getBlockHeight());
+    }
+
+    private void creditAccount(String network, String address, long amount) {
+        if (address == null || address.isBlank() || amount <= 0L) {
+            return;
+        }
+        Account acct = accountRepository.findByNetworkAndAddress(network, address).orElseGet(() -> {
+            Account a = new Account();
+            a.setNetwork(network);
+            a.setAddress(address);
+            a.setBalance("0");
+            a.setNonce(0L);
+            return a;
+        });
+
+        BigInteger bal = new BigInteger(acct.getBalance());
+        bal = bal.add(BigInteger.valueOf(amount));
+        acct.setBalance(bal.toString());
+        accountRepository.save(acct);
     }
 
     /**

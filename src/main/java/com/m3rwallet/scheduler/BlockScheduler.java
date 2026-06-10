@@ -159,10 +159,19 @@ public class BlockScheduler {
                 if (consensusReached) {
                     try {
                         finalized = blockProposalService.finalizeBlock(saved, network);
+                        boolean feeOk = false;
                         try {
-                            feeDistributionService.distributeConsensusFees(finalized, network);
+                            feeDistributionService.distributeBlockFees(finalized, network);
+                            feeOk = true;
                         } catch (Exception e) {
                             log.warn("[SLOT {}] Fee distribution failed: {}", slotNumber, e.getMessage());
+                        }
+                        if (feeOk) {
+                            try {
+                                blockProposalService.saveBlock(finalized, null);
+                            } catch (Exception e) {
+                                log.warn("[SLOT {}] Could not persist feeDistributed flag: {}", slotNumber, e.getMessage());
+                            }
                         }
                         if (blockBroadcastService != null) {
                             blockBroadcastService.broadcastFinalizedBlock(finalized, network);

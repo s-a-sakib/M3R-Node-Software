@@ -179,7 +179,7 @@
             <div class="wallet-row">
               <div>
                 <div class="eyebrow" id="heroNetwork">Mainnet node wallet</div>
-                <div class="balance"><span id="nodeBalance">0</span> M3R</div>
+                <div class="balance"><span id="nodeBalance">0.00</span> BDT</div>
               </div>
               <div class="eyebrow" id="identityMode">Address only</div>
             </div>
@@ -360,9 +360,13 @@
       if (s < 86400) return Math.floor(s / 3600) + 'h ago';
       return Math.floor(s / 86400) + 'd ago';
     }
+    function formatBdt(raw, places = 2){
+      const value = Number(raw ?? 0) / 100;
+      if (!Number.isFinite(value)) return '0.00';
+      return value.toLocaleString('en-US', { minimumFractionDigits: places, maximumFractionDigits: places }) + ' BDT';
+    }
     function formatBalance(raw){
-      const v = String(raw ?? '0');
-      return v.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+      return formatBdt(raw, 2);
     }
     async function jsonFetch(url, options){
       const res = await fetch(url, options);
@@ -518,7 +522,7 @@
             <td class="mono">${escapeHtml(shortValue(row.txHash, 14, 8))}</td>
             <td class="mono">${escapeHtml(shortValue(row.sender, 10, 6))}</td>
             <td class="mono">${escapeHtml(shortValue(row.recipient, 10, 6))}</td>
-            <td class="mono">${escapeHtml(row.fee ?? 0)}</td>
+            <td class="mono">${escapeHtml(formatBdt(row.fee ?? 0, 4))}</td>
           </tr>
         `).join('') : '<tr><td colspan="4" class="muted">Mempool is empty.</td></tr>';
       } catch(error) {
@@ -567,7 +571,10 @@
             <td class="mono">${escapeHtml(shortValue(tx.txHash, 14, 8))}</td>
             <td class="mono">${escapeHtml(shortValue(tx.sender, 10, 6))}</td>
             <td class="mono">${escapeHtml(shortValue(tx.recipient, 10, 6))}</td>
-            <td class="mono">${escapeHtml(tx.value ?? 0)}</td>
+            <td class="mono">${escapeHtml(formatBdt(tx.value ?? 0, 2))}</td>
+            <td class="mono">${escapeHtml(formatBdt(tx.totalFee ?? 0, 4))}</td>
+            <td class="mono">${escapeHtml(formatBdt(tx.broadcastFee ?? 0, 4))}</td>
+            <td class="mono">${escapeHtml(formatBdt(tx.consensusFee ?? 0, 4))}</td>
             <td>${escapeHtml(tx.status ?? '-')}</td>
           </tr>
         `).join('');
@@ -577,8 +584,8 @@
             <div class="panel-head"><div><h2>Block Transactions</h2><p>${(block.transactions || []).length} transaction records</p></div></div>
             <div class="table-wrap">
               <table>
-                <thead><tr><th>Hash</th><th>Sender</th><th>Recipient</th><th>Value</th><th>Status</th></tr></thead>
-                <tbody>${txRows || '<tr><td colspan="5" class="muted">No transactions in this block.</td></tr>'}</tbody>
+                <thead><tr><th>Hash</th><th>Sender</th><th>Recipient</th><th>Value</th><th>Total Fee</th><th>Broadcast</th><th>Proposer</th><th>Status</th></tr></thead>
+                <tbody>${txRows || '<tr><td colspan="8" class="muted">No transactions in this block.</td></tr>'}</tbody>
               </table>
             </div>
           </div>

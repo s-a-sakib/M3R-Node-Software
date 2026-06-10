@@ -173,15 +173,13 @@ public class WalletService {
                 ? tx.getParsedPayload().getAmount()
                 : BigInteger.ZERO;
 
-        // === BLOCKCHAIN: Calculate fees ===
+        // === BLOCKCHAIN: Split the actual signed transaction fee ===
         long broadcastFee = 0L;
         long consensusFee = 0L;
-        long totalFee = 0L;
+        long totalFee = tx.getFee().longValueExact();
         try {
             if (feeDistributionService != null) {
-                int txSizeBytes = rawTxHex.length() / 2;
-                var fees = feeDistributionService
-                        .calculateFees(txSizeBytes);
+                var fees = feeDistributionService.splitTotalFee(totalFee);
                 broadcastFee = fees.broadcastFee();
                 consensusFee = fees.consensusFee();
                 totalFee     = fees.totalFee();
@@ -195,7 +193,7 @@ public class WalletService {
 
         String executedTxHash = executeParsedTransaction(network, tx, txHash, fromState, currentBal, nonceFromUser, now);
 
-        // === BLOCKCHAIN: Add to mempool + record broadcast fee ===
+        // === BLOCKCHAIN: Add to mempool; fee rewards are paid after block finalization ===
         try {
             if (mempoolService != null) {
                 String broadcaster = (broadcasterAddress == null || broadcasterAddress.isBlank())
@@ -220,16 +218,6 @@ public class WalletService {
                 boolean added = mempoolService.addTransaction(pendingTx);
                 log.debug("Tx {} {} mempool",
                         txHash, added ? "added to" : "already in");
-
-                if (feeDistributionService != null && broadcastFee > 0) {
-                    feeDistributionService.recordBroadcastFee(
-                            txHash,
-                            broadcaster,
-                            network,
-                            broadcastFee,
-                            null   // blockHeight not known yet
-                    );
-                }
             }
         } catch (Exception e) {
             // MUST NOT affect tx result

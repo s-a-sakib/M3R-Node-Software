@@ -45,6 +45,7 @@ public class BlockBroadcastService {
     private final BlockRepository blockRepo;
     private final BlockTransactionRepository blockTxRepo;
     private final MempoolService mempoolService;
+    private final FeeDistributionService feeDistributionService;
     private final RestTemplate restTemplate;
 
     private List<String> peerUrls = List.of();
@@ -52,10 +53,12 @@ public class BlockBroadcastService {
     public BlockBroadcastService(BlockRepository blockRepo,
                                  BlockTransactionRepository blockTxRepo,
                                  MempoolService mempoolService,
+                                 FeeDistributionService feeDistributionService,
                                  RestTemplate restTemplate) {
         this.blockRepo = blockRepo;
         this.blockTxRepo = blockTxRepo;
         this.mempoolService = mempoolService;
+        this.feeDistributionService = feeDistributionService;
         this.restTemplate = restTemplate;
     }
 
@@ -226,15 +229,9 @@ public class BlockBroadcastService {
             block.setStateRoot(toStringValue(payload.get("stateRoot")));
             block.setValidatorSetHash(toStringValue(payload.get("validatorSetHash")));
             Boolean isFinalized = Boolean.TRUE.equals(payload.get("finalized")) || Boolean.TRUE.equals(payload.get("isFinalized"));
-            Boolean feeDistributedFlag = Boolean.TRUE.equals(payload.get("feeDistributed"));
             if (isFinalized) {
                 block.setIsFinalized(true);
                 block.setFinalizedAt(defaultLong(toLong(payload.get("finalizedAt")), System.currentTimeMillis()));
-                try {
-                    if (feeDistributedFlag) {
-                        block.setFeeDistributed(true);
-                    }
-                } catch (Exception ignored) {}
             } else {
                 block.setIsFinalized(false);
             }
@@ -256,6 +253,14 @@ public class BlockBroadcastService {
                     .filter(Objects::nonNull)
                     .collect(Collectors.toList());
             saveBlockTransactions(confirmedTxs);
+            if (isFinalized && feeDistributionService != null) {
+                try {
+                    feeDistributionService.distributeBlockFees(block, effectiveNetwork);
+                    blockRepo.save(block);
+                } catch (Exception e) {
+                    log.warn("Could not distribute received block {} fees: {}", blockHeight, e.getMessage());
+                }
+            }
             clearConfirmedTransactions(blockHeight, confirmedTxHashes);
 
             log.info("Received block {} from peer", blockHeight);

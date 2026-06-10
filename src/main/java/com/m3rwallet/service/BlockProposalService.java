@@ -212,15 +212,6 @@ public class BlockProposalService {
 
     @Transactional
     public Block finalizeBlock(Block block, String network) {
-        try {
-            if (block.getFeeDistributed() != null && block.getFeeDistributed()) {
-                log.info("Fees already distributed for block {}", block.getBlockHeight());
-            } else {
-                block.setFeeDistributed(true);
-            }
-        } catch (Exception e) {
-            log.warn("Could not set feeDistributed flag: {}", e.getMessage());
-        }
         block.setIsFinalized(true);
         block.setFinalizedAt(System.currentTimeMillis());
         // update tx statuses
