@@ -40,6 +40,9 @@ logging:
 
 # Application Configuration
 app:
+  admin:
+    username: ${M3R_ADMIN_USERNAME:hululuadmin}
+    password: ${M3R_ADMIN_PASSWORD:puripuri saitama}
   broadcast-fee: 100
   percent-fee-bps: 100
   genesis-address: NQWWb4huPaqUncdJHFm2FHFjTo1qqLskuq
@@ -69,7 +72,7 @@ app:
     unbonding-period-blocks: 100
     reputation-decay-rate: 0.999
     initial-reputation: 0.0
-    require-balance: false
+    require-balance: true
 
   fee-policy:
     broadcast-fee-bps: 2000

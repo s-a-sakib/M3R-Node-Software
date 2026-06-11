@@ -201,6 +201,7 @@
               <div class="metric"><span>Pending txs</span><strong id="pendingTxs">0</strong></div>
               <div class="metric"><span>Finalized blocks</span><strong id="finalizedBlocks">0</strong></div>
               <div class="metric"><span>Validators</span><strong id="activeValidators">0</strong></div>
+              <div class="metric"><span>Total supply</span><strong id="totalSupply">0.00</strong></div>
             </div>
           </section>
         </div>
@@ -402,6 +403,7 @@
         el('latestBlock').textContent = status.latestBlockHeight ?? stats.latestBlockHeight ?? '0';
         el('pendingTxs').textContent = status.pendingTxs ?? status.mempoolPending ?? '0';
         el('nodeHealth').textContent = status.status === 'OK' ? 'Online' : 'Unknown';
+        el('totalSupply').textContent = formatBalance(stats.totalSupply || 0);
         el('healthPill').className = 'pill ' + (status.status === 'OK' ? 'green' : 'amber');
         el('identityMode').textContent = status.privateKeyBacked ? 'Key-backed' : 'Address only';
         currentNodeAddress = status.nodeAddress || 'unknown';

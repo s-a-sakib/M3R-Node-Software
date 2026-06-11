@@ -9,9 +9,11 @@ import com.m3rwallet.entity.Validator.ValidatorStatus;
 import com.m3rwallet.config.ConsensusProperties;
 import com.m3rwallet.repository.BlockRepository;
 import com.m3rwallet.repository.BlockTransactionRepository;
+import com.m3rwallet.repository.EscrowRepository;
 import com.m3rwallet.repository.TxLedgerRepository;
 import com.m3rwallet.repository.ValidatorRepository;
 import com.m3rwallet.repository.AccountRepository;
+import com.m3rwallet.repository.TransactionRepository;
 import com.m3rwallet.service.BlockBroadcastService;
 import com.m3rwallet.service.FeeDistributionService;
 import com.m3rwallet.service.MempoolService;
@@ -64,6 +66,12 @@ public class WalletController {
 
     @Autowired
     private AccountRepository accountRepository;
+
+    @Autowired
+    private TransactionRepository transactionRepository;
+
+    @Autowired
+    private EscrowRepository escrowRepository;
 
     @Autowired(required = false)
     private ValidatorService validatorService;
@@ -536,6 +544,40 @@ public class WalletController {
         }
     }
 
+    @GetMapping("/{network}/transactions")
+    @ResponseBody
+    public ResponseEntity<?> getTransactions(
+            @PathVariable String network,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        try {
+            int safePage = Math.max(0, page);
+            int safeSize = Math.max(1, Math.min(size, 100));
+            int offset = safePage * safeSize;
+            List<Map<String, Object>> all = transactionRepository.findByNetwork(network).stream()
+                    .map(tx -> {
+                        Map<String, Object> m = new LinkedHashMap<>();
+                        m.put("hash", tx.getHash());
+                        m.put("status", tx.getStatus());
+                        m.put("createdAt", tx.getCreatedAt());
+                        m.put("network", tx.getNetwork());
+                        return m;
+                    })
+                    .collect(Collectors.toList());
+            List<Map<String, Object>> pageContent = offset >= all.size()
+                    ? List.of()
+                    : all.subList(offset, Math.min(offset + safeSize, all.size()));
+            return ResponseEntity.ok(Map.of(
+                    "content", pageContent,
+                    "totalElements", all.size(),
+                    "currentPage", safePage,
+                    "size", safeSize
+            ));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
     @GetMapping("/{network}/blocks/{height}")
     @ResponseBody
     public ResponseEntity<?> getBlock(
@@ -835,6 +877,36 @@ public class WalletController {
         }
     }
 
+    @GetMapping("/{network}/validators")
+    @ResponseBody
+    public ResponseEntity<?> getPublicValidators(@PathVariable String network) {
+        try {
+            List<Map<String, Object>> validators = validatorRepo
+                    .findByNetworkAndStatus(network, ValidatorStatus.ACTIVE)
+                    .stream()
+                    .map(v -> {
+                        Map<String, Object> m = new LinkedHashMap<>();
+                        m.put("address", AddressUtil.toDisplayAddress(v.getAddress()));
+                        m.put("stakedAmount", v.getStakedAmount());
+                        m.put("status", v.getStatus());
+                        m.put("weight", validatorService != null ? validatorService.calculateWeight(v) : 0.0d);
+                        m.put("successfulProposals", v.getSuccessfulProposals());
+                        m.put("totalProposals", v.getTotalProposals());
+                        return m;
+                    })
+                    .collect(Collectors.toList());
+
+            return ResponseEntity.ok(Map.of(
+                    "network", network,
+                    "validators", validators,
+                    "total", validators.size()
+            ));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError()
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
     @GetMapping("/{network}/mempool")
     @ResponseBody
     public ResponseEntity<?> getMempoolStatus(
@@ -887,7 +959,8 @@ public class WalletController {
                     "network",         network,
                     "finalizedBlocks", totalBlocks,
                     "activeValidators",totalValidators,
-                    "pendingTxs",      mempoolSize
+                    "pendingTxs",      mempoolSize,
+                    "totalSupply",     calculateTotalSupply(network).toPlainString()
             ));
         } catch (Exception e) {
             return ResponseEntity.internalServerError()
@@ -921,6 +994,27 @@ public class WalletController {
     }
 
     // Helper
+    private BigDecimal calculateTotalSupply(String network) {
+        BigDecimal accountBalances = accountRepository.findByNetwork(network).stream()
+                .map(a -> parseBigDecimalOrZero(a.getBalance()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal lockedValidatorStake = validatorRepo.findByNetwork(network).stream()
+                .map(v -> v.getStakedAmount() == null ? BigDecimal.ZERO : v.getStakedAmount())
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal lockedEscrows = escrowRepository.findByNetwork(network).stream()
+                .map(e -> parseBigDecimalOrZero(e.getAmount()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        return accountBalances.add(lockedValidatorStake).add(lockedEscrows);
+    }
+
+    private BigDecimal parseBigDecimalOrZero(String value) {
+        try {
+            return value == null ? BigDecimal.ZERO : new BigDecimal(value);
+        } catch (Exception e) {
+            return BigDecimal.ZERO;
+        }
+    }
+
     private Long getLong(Map<String, Object> m, String key) {
         try {
             Object v = m.get(key);

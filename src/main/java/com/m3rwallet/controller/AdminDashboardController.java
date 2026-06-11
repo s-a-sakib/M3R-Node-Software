@@ -21,6 +21,7 @@ import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.*;
+import java.math.BigDecimal;
 import java.util.stream.Collectors;
 
 @Controller
@@ -138,6 +139,7 @@ public class AdminDashboardController {
             long totalBlocks = blockRepo.count();
             long finalizedBlocks = blockRepo.countByNetworkAndIsFinalized("mainnet", true);
             long activeValidators = validatorRepo.findByStatus(Validator.ValidatorStatus.ACTIVE).size();
+            BigDecimal totalSupply = calculateTotalSupply("mainnet");
 
             Optional<Block> latest = blockRepo.findTopByNetworkOrderByBlockHeightDesc("mainnet");
 
@@ -148,6 +150,7 @@ public class AdminDashboardController {
             stats.put("latestBlockHeight", latest.map(Block::getBlockHeight).orElse(0L));
             stats.put("latestBlockHash", latest.map(Block::getBlockHash).orElse("none"));
             stats.put("latestBlockTime", latest.map(Block::getTimestamp).orElse(0L));
+            stats.put("totalSupply", totalSupply.toPlainString());
 
             return ResponseEntity.ok(stats);
         } catch (Exception e) {
@@ -268,6 +271,27 @@ public class AdminDashboardController {
     }
 
     // --- helpers ---
+    private BigDecimal calculateTotalSupply(String network) {
+        BigDecimal accountBalances = accountService.getAccountsByNetwork(network).stream()
+                .map(account -> parseBigDecimalOrZero(account.getBalance()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal lockedValidatorStake = validatorRepo.findByNetwork(network).stream()
+                .map(v -> v.getStakedAmount() == null ? BigDecimal.ZERO : v.getStakedAmount())
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal lockedEscrows = escrowService.getEscrowsByNetwork(network).stream()
+                .map(escrow -> parseBigDecimalOrZero(escrow.getAmount()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        return accountBalances.add(lockedValidatorStake).add(lockedEscrows);
+    }
+
+    private BigDecimal parseBigDecimalOrZero(String value) {
+        try {
+            return value == null ? BigDecimal.ZERO : new BigDecimal(value);
+        } catch (Exception e) {
+            return BigDecimal.ZERO;
+        }
+    }
+
     private boolean matchesAccount(Account account, String query) {
         return adminViewUtil.contains(account.getAddress(), query)
                 || adminViewUtil.contains(adminViewUtil.address(account.getAddress()), query)
