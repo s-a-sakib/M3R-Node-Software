@@ -22,6 +22,8 @@ import java.util.Arrays;
 @RequiredArgsConstructor
 @Slf4j
 public class WalletService {
+    public record VerifiedTxInfo(String senderAddress, BigInteger nonce) {}
+
     private final AccountService accountService;
     private final TransactionService transactionService;
     private final EscrowService escrowService;
@@ -105,7 +107,7 @@ public class WalletService {
         }
         BigInteger currentBal = new BigInteger(state.getBalance());
         BigInteger newBal = currentBal.add(amount);
-        accountService.setAccount(network, normalizedAddr, newBal, state.getNonce());
+        accountService.updateAccountInPlace(state, network, normalizedAddr, newBal, state.getNonce());
         log.info("[FAUCET][{}] {} += {} => {}", network, normalizedAddr, amount, newBal);
     }
 
@@ -120,6 +122,16 @@ public class WalletService {
         String txHash = computeTxHash(rawTxHex);
         validateTransactionState(network, tx, txHash);
         return txHash;
+    }
+
+    public VerifiedTxInfo getVerifiedTransactionInfo(String rawTxHex, String pubKeyCompressedHex) {
+        TxDecoder.ParsedTx tx = parseAndVerifyTransaction(rawTxHex, pubKeyCompressedHex);
+        return new VerifiedTxInfo(tx.getFromAddr20(), tx.getNonce());
+    }
+
+    public long getCurrentNonce(String network, String senderAddress) {
+        Account account = accountService.getAccount(network, senderAddress);
+        return account == null || account.getNonce() == null ? 0L : account.getNonce();
     }
 
     @Transactional
@@ -156,9 +168,11 @@ public class WalletService {
         }
 
         BigInteger nonceFromUser = tx.getNonce();
-        if (nonceFromUser.compareTo(BigInteger.valueOf(fromState.getNonce())) <= 0) {
+        BigInteger expectedNonce = BigInteger.valueOf(fromState.getNonce()).add(BigInteger.ONE);
+        if (!nonceFromUser.equals(expectedNonce)) {
             throw new IllegalArgumentException(
-                    "Nonce too low (tx=" + nonceFromUser + ", ledger=" + fromState.getNonce() + ")");
+                    "Invalid nonce (tx=" + nonceFromUser + ", expected=" + expectedNonce
+                            + ", ledger=" + fromState.getNonce() + ")");
         }
 
         BigInteger currentBal = new BigInteger(fromState.getBalance());
@@ -282,9 +296,11 @@ public class WalletService {
         }
 
         BigInteger nonceFromUser = tx.getNonce();
-        if (nonceFromUser.compareTo(BigInteger.valueOf(fromState.getNonce())) <= 0) {
+        BigInteger expectedNonce = BigInteger.valueOf(fromState.getNonce()).add(BigInteger.ONE);
+        if (!nonceFromUser.equals(expectedNonce)) {
             throw new IllegalArgumentException(
-                    "Nonce too low (tx=" + nonceFromUser + ", ledger=" + fromState.getNonce() + ")");
+                    "Invalid nonce (tx=" + nonceFromUser + ", expected=" + expectedNonce
+                            + ", ledger=" + fromState.getNonce() + ")");
         }
 
         BigInteger currentBal = new BigInteger(fromState.getBalance());
@@ -362,10 +378,10 @@ public class WalletService {
                 throw new IllegalArgumentException("Insufficient funds");
             }
 
-            // Update sender
-            fromState.setBalance(currentBal.subtract(totalCost).toString());
-            fromState.setNonce(nonceFromUser.longValue());
-            accountService.setAccount(network, tx.getFromAddr20(),
+                // Update sender
+                fromState.setBalance(currentBal.subtract(totalCost).toString());
+                fromState.setNonce(nonceFromUser.longValue());
+                accountService.updateAccountInPlace(fromState, network, tx.getFromAddr20(),
                     new BigInteger(fromState.getBalance()), fromState.getNonce());
 
             // Update recipient
@@ -377,7 +393,7 @@ public class WalletService {
                 toState.setNonce(0L);
             }
             BigInteger toCurBal = new BigInteger(toState.getBalance());
-            accountService.setAccount(network, toAddr, toCurBal.add(amount), toState.getNonce());
+            accountService.updateAccountInPlace(toState, network, toAddr, toCurBal.add(amount), toState.getNonce());
 
             // Ledger: sender sees SEND, recipient sees RECEIVE
             String amtStr = amount.toString();
@@ -407,10 +423,10 @@ public class WalletService {
                 throw new IllegalArgumentException("Escrow ID exists");
             }
 
-            // Deduct from buyer
-            fromState.setBalance(currentBal.subtract(totalCost).toString());
-            fromState.setNonce(nonceFromUser.longValue());
-            accountService.setAccount(network, tx.getFromAddr20(),
+                // Deduct from buyer
+                fromState.setBalance(currentBal.subtract(totalCost).toString());
+                fromState.setNonce(nonceFromUser.longValue());
+                accountService.updateAccountInPlace(fromState, network, tx.getFromAddr20(),
                     new BigInteger(fromState.getBalance()), fromState.getNonce());
 
             String buyer  = tx.getParsedPayload().getBuyer();
@@ -470,22 +486,22 @@ public class WalletService {
                 throw new IllegalArgumentException("Insufficient fee");
             }
 
-            // Deduct fee from releasor
-            fromState.setBalance(currentBal.subtract(fee).toString());
-            fromState.setNonce(nonceFromUser.longValue());
-            accountService.setAccount(network, tx.getFromAddr20(),
+                // Deduct fee from releasor
+                fromState.setBalance(currentBal.subtract(fee).toString());
+                fromState.setNonce(nonceFromUser.longValue());
+                accountService.updateAccountInPlace(fromState, network, tx.getFromAddr20(),
                     new BigInteger(fromState.getBalance()), fromState.getNonce());
 
             // Credit seller
             String sellerAddr = tx.getParsedPayload().getToAddr();
-            Account toState = accountService.getAccountForUpdate(network, sellerAddr);
+                Account toState = accountService.getAccountForUpdate(network, sellerAddr);
             if (toState == null) {
                 toState = new Account();
                 toState.setBalance("0");
                 toState.setNonce(0L);
             }
             BigInteger toCurBal = new BigInteger(toState.getBalance());
-            accountService.setAccount(network, sellerAddr,
+                accountService.updateAccountInPlace(toState, network, sellerAddr,
                     toCurBal.add(new BigInteger(escrow.getAmount())), toState.getNonce());
 
             escrowService.deleteEscrow(network, escrowId);
@@ -526,22 +542,22 @@ public class WalletService {
                 throw new IllegalArgumentException("Insufficient fee");
             }
 
-            // Deduct fee from refunder
-            fromState.setBalance(currentBal.subtract(fee).toString());
-            fromState.setNonce(nonceFromUser.longValue());
-            accountService.setAccount(network, tx.getFromAddr20(),
+                // Deduct fee from refunder
+                fromState.setBalance(currentBal.subtract(fee).toString());
+                fromState.setNonce(nonceFromUser.longValue());
+                accountService.updateAccountInPlace(fromState, network, tx.getFromAddr20(),
                     new BigInteger(fromState.getBalance()), fromState.getNonce());
 
             // Credit buyer
             String buyerAddr = tx.getParsedPayload().getToAddr();
-            Account toState = accountService.getAccountForUpdate(network, buyerAddr);
+                Account toState = accountService.getAccountForUpdate(network, buyerAddr);
             if (toState == null) {
                 toState = new Account();
                 toState.setBalance("0");
                 toState.setNonce(0L);
             }
             BigInteger toCurBal = new BigInteger(toState.getBalance());
-            accountService.setAccount(network, buyerAddr,
+                accountService.updateAccountInPlace(toState, network, buyerAddr,
                     toCurBal.add(new BigInteger(escrow.getAmount())), toState.getNonce());
 
             escrowService.deleteEscrow(network, escrowId);

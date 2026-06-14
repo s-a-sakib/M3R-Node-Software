@@ -16,19 +16,25 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class NodeConsensusService {
     public static final String CONSENSUS_TOKEN_HEADER = "X-M3R-Consensus-Token";
+    private static final int SENDER_LOCK_STRIPES = 1024;
+    private static final long FUTURE_NONCE_WAIT_MS = 15_000L;
+    private static final long FUTURE_NONCE_RETRY_SLEEP_MS = 25L;
 
     private final WalletService walletService;
     private final RestTemplate restTemplate;
     private final ConsensusProperties consensusProperties;
     private final NodeIdentityService nodeIdentityService;
+    private final Object[] senderLocks = createSenderLocks();
 
     @Autowired(required = false)
     private ValidatorService validatorService;
@@ -44,6 +50,53 @@ public class NodeConsensusService {
     }
 
     public TxResponse submitWithConsensus(String network, TxSubmitRequest request) {
+        WalletService.VerifiedTxInfo txInfo;
+        try {
+            txInfo = walletService.getVerifiedTransactionInfo(
+                    request.getRawTxHex(),
+                    request.getPubKeyCompressedHex());
+        } catch (IllegalArgumentException e) {
+            return TxResponse.builder()
+                    .status("REJECTED")
+                    .message(e.getMessage())
+                    .build();
+        } catch (Exception e) {
+            log.error("[CONSENSUS][{}] Could not identify sender", network, e);
+            return TxResponse.builder()
+                    .status("REJECTED")
+                    .message("Sender verification error")
+                    .build();
+        }
+
+        String senderAddress = txInfo.senderAddress();
+        synchronized (lockForSender(network, senderAddress)) {
+            BigInteger expectedNonce = BigInteger.valueOf(walletService.getCurrentNonce(network, senderAddress)).add(BigInteger.ONE);
+            if (txInfo.nonce().compareTo(expectedNonce) <= 0) {
+                return submitWithConsensusLocked(network, request);
+            }
+        }
+
+        long deadline = System.currentTimeMillis() + FUTURE_NONCE_WAIT_MS;
+        while (System.currentTimeMillis() < deadline) {
+            sleepBeforeNonceRetry();
+            synchronized (lockForSender(network, senderAddress)) {
+                BigInteger expectedNonce = BigInteger.valueOf(walletService.getCurrentNonce(network, senderAddress)).add(BigInteger.ONE);
+                if (txInfo.nonce().compareTo(expectedNonce) <= 0) {
+                    return submitWithConsensusLocked(network, request);
+                }
+            }
+        }
+
+        long ledgerNonce = walletService.getCurrentNonce(network, senderAddress);
+        BigInteger expectedNonce = BigInteger.valueOf(ledgerNonce).add(BigInteger.ONE);
+        return TxResponse.builder()
+                .status("REJECTED")
+                .message("Invalid nonce (tx=" + txInfo.nonce() + ", expected=" + expectedNonce
+                        + ", ledger=" + ledgerNonce + ")")
+                .build();
+    }
+
+    private TxResponse submitWithConsensusLocked(String network, TxSubmitRequest request) {
         List<String> peers = normalizedPeers();
         int totalNodes = peers.size() + 1;
         int quorum = quorum(totalNodes);
@@ -125,18 +178,38 @@ public class NodeConsensusService {
         }
 
         int executeFailures = 0;
+        List<String> executeFailureMessages = new ArrayList<>();
         for (String peer : peers) {
             try {
                 TxResponse response = post(peer, network, "execute", request);
                 if (response == null || !"ACCEPTED".equals(response.getStatus())) {
                     executeFailures++;
+                    executeFailureMessages.add(peer + ": "
+                            + (response != null ? response.getMessage() : "empty response"));
                     log.warn("[CONSENSUS][{}] Peer execute rejected: {} {}", network, peer,
                             response != null ? response.getMessage() : "empty response");
                 }
             } catch (RestClientException e) {
                 executeFailures++;
+                executeFailureMessages.add(peer + ": " + e.getMessage());
                 log.warn("[CONSENSUS][{}] Peer execute unavailable: {} {}", network, peer, e.getMessage());
             }
+        }
+
+        if (executeFailures > 0) {
+            log.error("[CONSENSUS][{}] Execute phase failed after quorum; refusing local execute. failures={}",
+                    network, executeFailureMessages);
+            return TxResponse.builder()
+                    .status("REJECTED")
+                    .txHash(txHash)
+                    .yesVotes(yesVotes)
+                    .totalPeers(totalNodes)
+                    .approvedWeight(approvedWeight)
+                    .totalWeight(totalWeight)
+                    .weightRatio(weightRatio)
+                    .consensusType(consensusType)
+                    .message("Consensus execute failed on peer(s): " + String.join("; ", executeFailureMessages))
+                    .build();
         }
 
         try {
@@ -195,6 +268,27 @@ public class NodeConsensusService {
 
     private int quorum(int totalNodes) {
         return (2 * totalNodes + 2) / 3;
+    }
+
+    private Object lockForSender(String network, String senderAddress) {
+        int index = Math.floorMod(Objects.hash(network, senderAddress), senderLocks.length);
+        return senderLocks[index];
+    }
+
+    private static Object[] createSenderLocks() {
+        Object[] locks = new Object[SENDER_LOCK_STRIPES];
+        for (int i = 0; i < locks.length; i++) {
+            locks[i] = new Object();
+        }
+        return locks;
+    }
+
+    private void sleepBeforeNonceRetry() {
+        try {
+            Thread.sleep(FUTURE_NONCE_RETRY_SLEEP_MS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     /**

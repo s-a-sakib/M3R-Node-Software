@@ -8,8 +8,8 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
       connection-timeout: 30000
-      maximum-pool-size: 10
-      minimum-idle: 2
+      maximum-pool-size: 20
+      minimum-idle: 5
       auto-commit: true
       pool-name: M3R-Pool
   jpa:
@@ -72,7 +72,7 @@ app:
     unbonding-period-blocks: 100
     reputation-decay-rate: 0.999
     initial-reputation: 0.0
-    require-balance: true
+    require-balance: false
 
   fee-policy:
     broadcast-fee-bps: 2000
@@ -82,7 +82,9 @@ app:
 
   blockchain:
     network: mainnet
-    max-block-size: 5000
+    slot-ms: 15000
+    initial-delay-ms: 8000
+    max-block-size: 500
     skip-empty-blocks: true
     finality-confirmations: 2
 
