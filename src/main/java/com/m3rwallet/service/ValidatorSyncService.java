@@ -59,10 +59,6 @@ public class ValidatorSyncService {
         try {
             long now = System.currentTimeMillis();
             if (v == null) return;
-            if (now - v.getRegisteredAt() > 5000) {
-                log.debug("Skipping sync — validator registered long ago: {}", v.getAddress());
-                return;
-            }
             List<String> peers = consensusProperties.getPeers();
             if (peers == null || peers.isEmpty() || v == null) {
                 return;
@@ -72,6 +68,7 @@ public class ValidatorSyncService {
             payload.put("address", v.getAddress());
             payload.put("network", v.getNetwork());
             payload.put("stakeAmount", v.getStakedAmount().toString());
+            payload.put("reliabilityScoreScaled", v.getReliabilityScoreScaled());
             payload.put("publicKey", "");
             payload.put("source", "peer-sync");
 
@@ -162,22 +159,49 @@ public class ValidatorSyncService {
             if (!network.equals(validatorNetwork)) {
                 return false;
             }
-            if (validatorRepository.findByAddressAndNetwork(address, validatorNetwork).isPresent()) {
-                return false;
+            var existing = validatorRepository.findByAddressAndNetwork(address, validatorNetwork);
+            Validator v;
+            if (existing.isPresent()) {
+                v = existing.get();
+                // Update stake if provided
+                try {
+                    var parsedStake = parseStake(validatorMap.get("stakedAmount"));
+                    if (parsedStake != null) v.setStakedAmount(parsedStake);
+                } catch (Exception ignored) {
+                }
+                // Update reliability score to the maximum observed
+                try {
+                    String rvRaw = stringValue(validatorMap.get("reliabilityScoreScaled"));
+                    if (rvRaw != null && !rvRaw.isBlank()) {
+                        long peerRv = Long.parseLong(rvRaw);
+                        Long localRv = v.getReliabilityScoreScaled() == null ? 0L : v.getReliabilityScoreScaled();
+                        if (peerRv > localRv) {
+                            v.setReliabilityScoreScaled(peerRv);
+                        }
+                    }
+                } catch (Exception ignored) {
+                }
+            } else {
+                v = new Validator();
+                v.setAddress(address);
+                v.setNetwork(validatorNetwork);
+                v.setStakedAmount(parseStake(validatorMap.get("stakedAmount")));
+                try {
+                    String rvRaw = stringValue(validatorMap.get("reliabilityScoreScaled"));
+                    long peerRv = (rvRaw == null || rvRaw.isBlank()) ? 0L : Long.parseLong(rvRaw);
+                    v.setReliabilityScoreScaled(peerRv);
+                } catch (Exception ignored) {
+                    v.setReliabilityScoreScaled(0L);
+                }
+                v.setStatus(Validator.ValidatorStatus.ACTIVE);
+                v.setRegisteredAt(System.currentTimeMillis());
+                v.setTotalProposals(0L);
+                v.setSuccessfulProposals(0L);
+                v.setCorruptedProposals(0L);
             }
 
-            Validator v = new Validator();
-            v.setAddress(address);
-            v.setNetwork(validatorNetwork);
-            v.setStakedAmount(parseStake(validatorMap.get("stakedAmount")));
-            v.setReliabilityScoreScaled(0L);
-            v.setStatus(Validator.ValidatorStatus.ACTIVE);
-            v.setRegisteredAt(System.currentTimeMillis());
-            v.setTotalProposals(0L);
-            v.setSuccessfulProposals(0L);
-            v.setCorruptedProposals(0L);
             validatorRepository.save(v);
-            log.info("[VALIDATOR SYNC] Saved peer validator: {} on {}", address, validatorNetwork);
+            log.info("[VALIDATOR SYNC] Saved/Updated peer validator: {} on {}", address, validatorNetwork);
             return true;
         } catch (Exception e) {
             log.warn("[VALIDATOR SYNC] Could not save peer validator: {}", e.getMessage());

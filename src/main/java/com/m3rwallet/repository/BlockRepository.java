@@ -52,4 +52,7 @@ public interface BlockRepository extends JpaRepository<Block, Long> {
 
     @Transactional(readOnly = true)
     Optional<Block> findBySlotNumberAndProposerAddressAndNetwork(Long slotNumber, String proposerAddress, String network);
+
+    @Transactional(readOnly = true)
+    List<Block> findByNetworkAndBlockHeightGreaterThan(String network, Long blockHeight);
 }

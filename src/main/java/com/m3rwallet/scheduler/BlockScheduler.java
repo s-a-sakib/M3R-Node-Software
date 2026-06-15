@@ -145,21 +145,21 @@ public class BlockScheduler {
                 return;
             }
 
-            Block block = blockProposalService.buildBlock(slotNumber, selected, pending, network);
-            List<BlockTransaction> txs = blockProposalService.createBlockTransactions(pending, block);
-            Block saved = blockProposalService.saveBlock(block, txs);
-            // DO NOT finalize yet — broadcast for voting first
+            Block candidate = blockProposalService.buildBlock(slotNumber, selected, pending, network);
+            List<BlockTransaction> txs = blockProposalService.createBlockTransactions(pending, candidate);
+            // Do not persist the candidate until consensus is reached
             Block finalized = null;
             try {
-                log.info("[SLOT {}] Broadcasting block {} for consensus voting", slotNumber, saved.getBlockHeight());
+                log.info("[SLOT {}] Broadcasting block {} for consensus voting", slotNumber, candidate.getBlockHeight());
                 boolean consensusReached = false;
                 try {
-                    consensusReached = blockConsensusVoteService.collectVotes(saved, network);
+                    consensusReached = blockConsensusVoteService.collectVotes(candidate, network);
                 } catch (Exception e) {
                     log.warn("[SLOT {}] Vote collection failed: {}", slotNumber, e.getMessage());
                 }
                 if (consensusReached) {
                     try {
+                        Block saved = blockProposalService.saveBlock(candidate, txs); // persist only after YES
                         finalized = blockProposalService.finalizeBlock(saved, network);
                         boolean feeOk = false;
                         try {
@@ -183,12 +183,8 @@ public class BlockScheduler {
                         log.warn("[SLOT {}] Finalize after consensus failed: {}", slotNumber, e.getMessage());
                     }
                 } else {
-                    try {
-                        blockProposalService.deleteBlock(saved);
-                    } catch (Exception e) {
-                        log.warn("[SLOT {}] Could not delete rejected block {}: {}", slotNumber, saved.getBlockHeight(), e.getMessage());
-                    }
-                    log.warn("[SLOT {}] Block {} rejected — no 2/3 consensus", slotNumber, saved.getBlockHeight());
+                    // Nothing was persisted; nothing to delete
+                    log.warn("[SLOT {}] Block {} rejected — no 2/3 consensus", slotNumber, candidate.getBlockHeight());
                 }
             } catch (Exception e) {
                 log.warn("[SLOT {}] Consensus broadcast failed (non-fatal): {}", slotNumber, e.getMessage());

@@ -4,6 +4,7 @@ import com.m3rwallet.config.ConsensusProperties;
 import com.m3rwallet.entity.Block;
 import com.m3rwallet.entity.Peer;
 import com.m3rwallet.repository.BlockRepository;
+import com.m3rwallet.repository.BlockTransactionRepository;
 import com.m3rwallet.repository.PeerRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -25,6 +26,7 @@ public class PeerSyncService {
 
     private final PeerRepository peerRepository;
     private final BlockRepository blockRepository;
+    private final BlockTransactionRepository blockTransactionRepository;
     private final RestTemplate restTemplate;
     private final String selfUrl;
     private final String bootstrapPeersConfig;
@@ -36,6 +38,7 @@ public class PeerSyncService {
 
     public PeerSyncService(PeerRepository peerRepository,
                            BlockRepository blockRepository,
+                           BlockTransactionRepository blockTransactionRepository,
                            RestTemplate restTemplate,
                            @Value("${app.node.self-url}") String selfUrl,
                            @Value("${app.node.bootstrap-peers:}") String bootstrapPeersConfig,
@@ -43,6 +46,7 @@ public class PeerSyncService {
                            ConsensusProperties consensusProperties) {
         this.peerRepository = peerRepository;
         this.blockRepository = blockRepository;
+        this.blockTransactionRepository = blockTransactionRepository;
         this.restTemplate = restTemplate;
         this.selfUrl = selfUrl;
         this.bootstrapPeersConfig = bootstrapPeersConfig;
@@ -242,11 +246,19 @@ public class PeerSyncService {
                             if (fetched != null) {
                                 Optional<Block> sameHeight = blockRepository.findById(fetched.getBlockHeight());
                                 if (sameHeight.isPresent()) {
-                                    if (!Objects.equals(sameHeight.get().getBlockHash(), fetched.getBlockHash())) {
-                                        log.warn("Skipping peer block {} from {} because local height has different hash",
-                                                ht, peer.getPeerUrl());
+                                    if (Objects.equals(sameHeight.get().getBlockHash(), fetched.getBlockHash())) {
+                                        continue; // identical block, nothing to do
                                     }
-                                    continue;
+                                    // Different hash at same height -> fork conflict
+                                    if (peerHeight > localHeight) {
+                                        log.warn("[FORK] Conflict at height {}. Peer chain longer ({} vs {}). Rolling back.",
+                                                ht, peerHeight, localHeight);
+                                        rollbackToHeight(ht - 1, network);
+                                        // fall through to save fetched block from peer
+                                    } else {
+                                        log.warn("[FORK] Conflict at height {} but peer not longer. Holding.", ht);
+                                        break;
+                                    }
                                 }
                                 if (!hasValidLocalParent(fetched)) {
                                     log.warn("Skipping peer block {} from {} because parent is missing or mismatched",
@@ -287,6 +299,30 @@ public class PeerSyncService {
         } catch (Exception e) {
             log.warn("Parent validation failed during peer sync: {}", e.getMessage());
             return false;
+        }
+    }
+
+    @Transactional
+    private void rollbackToHeight(long targetHeight, String network) {
+        try {
+            List<Block> toDelete = blockRepository.findByNetworkAndBlockHeightGreaterThan(network, targetHeight);
+            if (toDelete == null || toDelete.isEmpty()) return;
+            toDelete.sort(Comparator.comparingLong(Block::getBlockHeight).reversed());
+            for (Block b : toDelete) {
+                try {
+                    blockTransactionRepository.deleteByBlock(b);
+                } catch (Exception ex) {
+                    log.warn("[FORK-ROLLBACK] Failed to delete txs for block {}: {}", b.getBlockHeight(), ex.getMessage());
+                }
+                try {
+                    blockRepository.delete(b);
+                    log.warn("[FORK-ROLLBACK] Deleted forked block {} hash={}", b.getBlockHeight(), b.getBlockHash());
+                } catch (Exception ex) {
+                    log.warn("[FORK-ROLLBACK] Failed to delete block {}: {}", b.getBlockHeight(), ex.getMessage());
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[FORK-ROLLBACK] Rollback failed: {}", e.getMessage());
         }
     }
 

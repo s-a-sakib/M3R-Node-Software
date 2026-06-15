@@ -23,6 +23,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 @Service
@@ -184,8 +185,16 @@ public class BlockBroadcastService {
                 return Map.of("status", "REJECTED", "error", "Missing blockHeight or blockHash");
             }
 
-            if (blockRepo.findById(blockHeight).isPresent()) {
-                return Map.of("status", "ALREADY_KNOWN", "blockHeight", blockHeight);
+            Optional<Block> existingAtHeight = blockRepo.findById(blockHeight);
+            if (existingAtHeight.isPresent()) {
+                if (Objects.equals(existingAtHeight.get().getBlockHash(), blockHash)) {
+                    return Map.of("status", "ALREADY_KNOWN", "blockHeight", blockHeight);
+                }
+                // Different hash at same height — report fork conflict and let sync resolve it
+                log.warn("[RECEIVE] Fork conflict at height {} — local={} incoming={}",
+                        blockHeight, existingAtHeight.get().getBlockHash(), blockHash);
+                return Map.of("status", "FORK_CONFLICT", "blockHeight", blockHeight,
+                        "localHash", existingAtHeight.get().getBlockHash());
             }
             if (blockRepo.findByBlockHashAndNetwork(blockHash, effectiveNetwork).isPresent()) {
                 return Map.of("status", "ALREADY_KNOWN", "blockHeight", blockHeight);
