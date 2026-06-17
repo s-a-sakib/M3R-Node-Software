@@ -27,8 +27,11 @@ import java.util.Objects;
 public class NodeConsensusService {
     public static final String CONSENSUS_TOKEN_HEADER = "X-M3R-Consensus-Token";
     private static final int SENDER_LOCK_STRIPES = 1024;
-    private static final long FUTURE_NONCE_WAIT_MS = 15_000L;
-    private static final long FUTURE_NONCE_RETRY_SLEEP_MS = 25L;
+    @Value("${app.consensus.future-nonce-wait-ms:15000}")
+    private long futureNonceWaitMs;
+
+    @Value("${app.consensus.future-nonce-retry-sleep-ms:25}")
+    private long futureNonceRetrySleepMs;
 
     private final WalletService walletService;
     private final RestTemplate restTemplate;
@@ -76,7 +79,7 @@ public class NodeConsensusService {
             }
         }
 
-        long deadline = System.currentTimeMillis() + FUTURE_NONCE_WAIT_MS;
+        long deadline = System.currentTimeMillis() + futureNonceWaitMs;
         while (System.currentTimeMillis() < deadline) {
             sleepBeforeNonceRetry();
             synchronized (lockForSender(network, senderAddress)) {
@@ -285,7 +288,7 @@ public class NodeConsensusService {
 
     private void sleepBeforeNonceRetry() {
         try {
-            Thread.sleep(FUTURE_NONCE_RETRY_SLEEP_MS);
+            Thread.sleep(futureNonceRetrySleepMs);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }

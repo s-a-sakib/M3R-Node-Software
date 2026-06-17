@@ -1,5 +1,6 @@
 package com.m3rwallet.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.*;
 import jakarta.persistence.*;
 import org.hibernate.annotations.CreationTimestamp;
@@ -58,6 +59,7 @@ public class Receipt {
     private Timestamp createdAt;
 
     /** Many-to-one link to the block (read-only). */
+    @JsonIgnore  // breaks Block→receipts→block→receipts circular reference
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "block_height", referencedColumnName = "block_height", insertable = false, updatable = false)
     private Block block;
