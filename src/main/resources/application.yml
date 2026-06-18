@@ -47,10 +47,13 @@ app:
   percent-fee-bps: 100
   genesis-address: NQWWb4huPaqUncdJHFm2FHFjTo1qqLskuq
   consensus:
-    enabled: false
+    enabled: true
     timeout-ms: 2500
-    shared-secret: ""
-    peers: []
+    shared-secret: "local-test-secret"
+    peers:
+      - http://localhost:3000
+      - http://localhost:4000
+      - http://localhost:5000
   cors-origins: 
   faucet:
     max-amount: 100000
@@ -89,7 +92,7 @@ app:
     finality-confirmations: 2
 
   node:
-    self-url: ${NODE_SELF_URL:http://localhost:3000}
+    self-url: http://localhost:${server.port:3000}
     bootstrap-peers: ${NODE_BOOTSTRAP_PEERS:}
     private-key: ${M3R_NODE_PRIVATE_KEY:}
     block-sync-interval-ms: 10000

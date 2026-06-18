@@ -45,6 +45,9 @@ public class NodeConsensusService {
     @Autowired(required = false)
     private ValidatorRepository validatorRepository;
 
+    @Autowired(required = false)
+    private AccountReconciliationService accountReconciliationService;
+
     @Value("${app.blockchain.network:mainnet}")
     private String defaultNetwork;
 
@@ -109,21 +112,15 @@ public class NodeConsensusService {
         try {
             txHash = walletService.validateTransaction(network, request.getRawTxHex(), request.getPubKeyCompressedHex());
         } catch (IllegalArgumentException e) {
-            return TxResponse.builder()
-                    .status("REJECTED")
-                    .message(e.getMessage())
-                    .build();
+            return TxResponse.builder().status("REJECTED").message(e.getMessage()).build();
         } catch (Exception e) {
             log.error("[CONSENSUS][{}] Local validation failed", network, e);
-            return TxResponse.builder()
-                    .status("REJECTED")
-                    .message("Local validation error")
-                    .build();
+            return TxResponse.builder().status("REJECTED").message("Local validation error: " + e.getMessage()).build();
         }
 
+        // VALIDATE PHASE
         int yesVotes = 1;
-        List<String> yesVoterAddresses = new ArrayList<>();
-        yesVoterAddresses.add(nodeIdentityService.getAddressOrUnknown());
+        List<String> yesVoterAddresses = new ArrayList<>(List.of(nodeIdentityService.getAddressOrUnknown()));
         List<String> rejections = new ArrayList<>();
         List<String> unavailable = new ArrayList<>();
 
@@ -132,35 +129,22 @@ public class NodeConsensusService {
                 TxResponse response = post(peer, network, "validate", request);
                 if (response != null && "ACCEPTED".equals(response.getStatus())) {
                     yesVotes++;
-                    yesVoterAddresses.add(response.getValidatorAddress());
+                    if (response.getValidatorAddress() != null) yesVoterAddresses.add(response.getValidatorAddress());
                 } else {
-                    String reason = response != null ? response.getMessage() : "empty response";
-                    rejections.add(peer + ": " + reason);
+                    rejections.add(peer + ": " + (response != null ? response.getMessage() : "empty"));
                 }
-            } catch (RestClientException e) {
+            } catch (Exception e) {
                 unavailable.add(peer + ": " + e.getMessage());
-                log.warn("[CONSENSUS][{}] Peer validate unavailable: {} {}", network, peer, e.getMessage());
+                log.warn("[CONSENSUS][{}] Peer validate failed: {}", network, peer, e);
             }
         }
 
+        // === Consensus check ===
         double totalWeight = getTotalNetworkWeight(totalNodes, network);
         double approvedWeight = getApprovedWeight(yesVoterAddresses, network);
-        double weightRatio = totalWeight > 0.0d ? approvedWeight / totalWeight : 0.0d;
-        boolean weightedAvailable = hasActiveValidators(network);
-        boolean weightedConsensus = weightedAvailable && weightRatio >= (2.0d / 3.0d);
+        double weightRatio = totalWeight > 0 ? approvedWeight / totalWeight : 0;
+        boolean weightedConsensus = hasActiveValidators(network) && weightRatio >= (2.0 / 3.0);
         boolean countConsensus = yesVotes >= quorum;
-        String consensusType = weightedConsensus ? "WEIGHTED" : "COUNT_FALLBACK";
-
-        log.info("[CONSENSUS][{}] approvedWeight={}/{} ({}%) votes={}/{} quorum={} consensusType={} weightedAvailable={}",
-                network,
-                String.format("%.4f", approvedWeight),
-                String.format("%.4f", totalWeight),
-                String.format("%.1f", weightRatio * 100.0d),
-                yesVotes,
-                totalNodes,
-                quorum,
-                consensusType,
-                weightedAvailable);
 
         if (!weightedConsensus && !countConsensus) {
             return TxResponse.builder()
@@ -171,7 +155,7 @@ public class NodeConsensusService {
                     .approvedWeight(approvedWeight)
                     .totalWeight(totalWeight)
                     .weightRatio(weightRatio)
-                    .consensusType(consensusType)
+                    .consensusType(weightedConsensus ? "WEIGHTED" : "COUNT_FALLBACK")
                     .message("Consensus rejected: yesVotes=" + yesVotes + "/" + totalNodes
                             + ", quorum=" + quorum
                             + ", approvedWeight=" + String.format("%.4f", approvedWeight) + "/" + String.format("%.4f", totalWeight)
@@ -180,70 +164,61 @@ public class NodeConsensusService {
                     .build();
         }
 
-        int executeFailures = 0;
-        List<String> executeFailureMessages = new ArrayList<>();
+        // === EXECUTE PHASE - TOLERANT ===
+        List<String> executeFailures = new ArrayList<>();
         for (String peer : peers) {
             try {
-                TxResponse response = post(peer, network, "execute", request);
-                if (response == null || !"ACCEPTED".equals(response.getStatus())) {
-                    executeFailures++;
-                    executeFailureMessages.add(peer + ": "
-                            + (response != null ? response.getMessage() : "empty response"));
-                    log.warn("[CONSENSUS][{}] Peer execute rejected: {} {}", network, peer,
-                            response != null ? response.getMessage() : "empty response");
+                TxResponse resp = post(peer, network, "execute", request);
+                if (resp == null || !"ACCEPTED".equals(resp.getStatus())) {
+                    executeFailures.add(peer + ": " + (resp != null ? resp.getMessage() : "null"));
                 }
-            } catch (RestClientException e) {
-                executeFailures++;
-                executeFailureMessages.add(peer + ": " + e.getMessage());
-                log.warn("[CONSENSUS][{}] Peer execute unavailable: {} {}", network, peer, e.getMessage());
+            } catch (Exception e) {
+                executeFailures.add(peer + ": " + e.getMessage());
+                log.warn("[CONSENSUS][{}] Peer execute failed: {} : {}", network, peer, e.getMessage());
             }
         }
 
-        if (executeFailures > 0) {
-            log.error("[CONSENSUS][{}] Execute phase failed after quorum; refusing local execute. failures={}",
-                    network, executeFailureMessages);
-            return TxResponse.builder()
-                    .status("REJECTED")
-                    .txHash(txHash)
-                    .yesVotes(yesVotes)
-                    .totalPeers(totalNodes)
-                    .approvedWeight(approvedWeight)
-                    .totalWeight(totalWeight)
-                    .weightRatio(weightRatio)
-                    .consensusType(consensusType)
-                    .message("Consensus execute failed on peer(s): " + String.join("; ", executeFailureMessages))
-                    .build();
+        log.info("[CONSENSUS][{}] Execute phase: {} failures out of {} peers",
+                network, executeFailures.size(), peers.size());
+
+        // === ALWAYS EXECUTE LOCALLY (this node is the submitter's source of truth) ===
+        String executedHash;
+        try {
+            executedHash = walletService.executeTransaction(
+                    network, request.getRawTxHex(), request.getPubKeyCompressedHex(), request.getBroadcasterAddress());
+            log.info("[CONSENSUS][{}] Local execution SUCCESS: {}", network, executedHash);
+        } catch (Exception e) {
+            log.error("[CONSENSUS][{}] Local execute FAILED after quorum", network, e);
+            return TxResponse.builder().status("REJECTED").message("Local execute failed: " + e.getMessage()).build();
         }
 
+        // Optional final broadcast
+        try { broadcastFinalState(network, executedHash); } catch (Exception ignored) {}
         try {
-            String executedHash = walletService.executeTransaction(
-                    network,
-                    request.getRawTxHex(),
-                    request.getPubKeyCompressedHex(),
-                    request.getBroadcasterAddress());
-            return TxResponse.builder()
-                    .status("ACCEPTED")
-                    .txHash(executedHash)
-                    .yesVotes(yesVotes)
-                    .totalPeers(totalNodes)
-                    .approvedWeight(approvedWeight)
-                    .totalWeight(totalWeight)
-                    .weightRatio(weightRatio)
-                    .consensusType(consensusType)
-                    .message("Consensus accepted: yesVotes=" + yesVotes + "/" + totalNodes
-                            + ", quorum=" + quorum
-                            + ", approvedWeight=" + String.format("%.4f", approvedWeight) + "/" + String.format("%.4f", totalWeight)
-                            + ", weightRatio=" + String.format("%.4f", weightRatio)
-                            + (executeFailures > 0 ? ", peerExecuteFailures=" + executeFailures : ""))
-                    .build();
-        } catch (IllegalArgumentException e) {
-            log.error("[CONSENSUS][{}] Local execute rejected after quorum: {}", network, e.getMessage());
-            return TxResponse.builder()
-                    .status("REJECTED")
-                    .txHash(txHash)
-                    .message("Local execute rejected after quorum: " + e.getMessage())
-                    .build();
+            if (accountReconciliationService != null) {
+                WalletService.VerifiedTxInfo txInfo = walletService.getVerifiedTransactionInfo(
+                        request.getRawTxHex(), request.getPubKeyCompressedHex());
+                accountReconciliationService.reconcileAccount(network, txInfo.senderAddress());
+            }
+        } catch (Exception e) {
+            log.debug("[CONSENSUS][{}] Post-execute reconciliation skipped: {}", network, e.getMessage());
         }
+
+        return TxResponse.builder()
+                .status("ACCEPTED")
+                .txHash(executedHash)
+                .yesVotes(yesVotes)
+                .totalPeers(totalNodes)
+                .approvedWeight(approvedWeight)
+                .totalWeight(totalWeight)
+                .weightRatio(weightRatio)
+                .consensusType(weightedConsensus ? "WEIGHTED" : "COUNT_FALLBACK")
+                .message("Consensus accepted: yesVotes=" + yesVotes + "/" + totalNodes
+                        + ", quorum=" + quorum
+                        + ", approvedWeight=" + String.format("%.4f", approvedWeight) + "/" + String.format("%.4f", totalWeight)
+                        + ", weightRatio=" + String.format("%.4f", weightRatio)
+                        + (executeFailures.isEmpty() ? "" : ", peerExecuteFailures=" + executeFailures.size()))
+                .build();
     }
 
     private TxResponse post(String peer, String network, String action, TxSubmitRequest request) {
@@ -380,5 +355,12 @@ public class NodeConsensusService {
             parts.add("unavailable=" + unavailable);
         }
         return parts.isEmpty() ? "" : ", " + String.join(", ", parts);
+    }
+
+    // Lightweight final state broadcast hook
+    private void broadcastFinalState(String network, String txHash) {
+        try {
+            log.info("[STATE-BROADCAST][{}] Transaction finalized: {}", network, txHash);
+        } catch (Exception ignored) {}
     }
 }

@@ -13,6 +13,7 @@ import org.apache.commons.codec.binary.Hex;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Isolation;
 
 import java.math.BigInteger;
 import java.security.MessageDigest;
@@ -134,20 +135,21 @@ public class WalletService {
         return account == null || account.getNonce() == null ? 0L : account.getNonce();
     }
 
-    @Transactional
+    @Transactional(isolation = Isolation.SERIALIZABLE)
     public String executeTransaction(String network, String rawTxHex, String pubKeyCompressedHex) {
         return executeTransaction(network, rawTxHex, pubKeyCompressedHex, null);
     }
 
-    @Transactional
+    @Transactional(isolation = Isolation.SERIALIZABLE)
     public String executeTransaction(String network, String rawTxHex, String pubKeyCompressedHex, String broadcasterAddress) {
         TxDecoder.ParsedTx tx = parseAndVerifyTransaction(rawTxHex, pubKeyCompressedHex);
         String txHash = computeTxHash(rawTxHex);
 
         // ---- Replay protection (global by hash) ----
         try {
-            if (transactionRepository != null && transactionRepository.existsByTxHash(txHash)) {
-                throw new IllegalArgumentException("Tx already known (replay)");
+            if (transactionRepository != null && transactionRepository.existsByHash(txHash)) {
+                log.info("[EXECUTE] Transaction {} already processed", txHash);
+                return txHash; // idempotent: already processed
             }
         } catch (Exception e) {
             log.warn("Replay protection check failed (non-fatal): {}", e.getMessage());

@@ -149,21 +149,42 @@ public class BlockBroadcastService {
     }
 
     public void broadcastFinalizedBlock(Block block, String network) {
+        if (block == null) return;
         try {
-            if (block == null) return;
             Map<String, Object> payload = buildBlockPayload(block);
             payload.put("finalized", true);
+            payload.put("isFinalized", true);
+
+            log.info("[BROADCAST] Sending finalized block {} (hash={}) to {} peers", 
+                     block.getBlockHeight(), block.getBlockHash(), peerUrls.size());
+
+            String self = getSelfUrl();
             for (String peer : peerUrls) {
+                if (peer.equals(self)) continue; // avoid self
                 try {
                     String url = peer + "/" + network + "/blocks/receive";
-                    restTemplate.postForEntity(url, payload, Map.class);
-                    log.info("Finalized block {} sent to {}", block.getBlockHeight(), peer);
+                    ResponseEntity<Map> response = restTemplate.postForEntity(url, payload, Map.class);
+                    log.info("[BROADCAST] Block {} → {} : {}", block.getBlockHeight(), peer, response.getStatusCode());
                 } catch (Exception e) {
-                    log.warn("Broadcast to {} failed: {}", peer, e.getMessage());
+                    log.warn("[BROADCAST] Failed to send block {} to {}: {}", block.getBlockHeight(), peer, e.getMessage());
                 }
             }
         } catch (Exception e) {
-            log.warn("broadcastFinalizedBlock failed: {}", e.getMessage());
+            log.error("[BROADCAST] Finalized block broadcast failed", e);
+        }
+    }
+
+    @Value("${app.node.self-url:}")
+    private String selfUrlProp;
+
+    private String getSelfUrl() {
+        try {
+            String s = (selfUrlProp == null || selfUrlProp.isBlank())
+                    ? "http://localhost:" + System.getProperty("server.port", "3000")
+                    : selfUrlProp;
+            return stripTrailingSlash(s);
+        } catch (Exception e) {
+            return "http://localhost:" + System.getProperty("server.port", "3000");
         }
     }
 
@@ -405,6 +426,29 @@ public class BlockBroadcastService {
             return new BigDecimal(String.valueOf(value));
         } catch (Exception e) {
             return null;
+        }
+    }
+
+    public void broadcastTransactionFinalized(String network, String txHash, String from, String to, java.math.BigDecimal amount) {
+        try {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("txHash", txHash);
+            payload.put("network", network);
+            payload.put("from", from);
+            payload.put("to", to);
+            payload.put("amount", amount);
+
+            String self = getSelfUrl();
+            for (String peer : peerUrls) {
+                if (peer.equals(self)) continue;
+                try {
+                    restTemplate.postForEntity(peer + "/" + network + "/node/tx/finalized", payload, String.class);
+                } catch (Exception e) {
+                    log.debug("Failed to broadcast finalized tx to {}: {}", peer, e.getMessage());
+                }
+            }
+        } catch (Exception e) {
+            log.debug("broadcastTransactionFinalized failed: {}", e.getMessage());
         }
     }
 
