@@ -1,12 +1,18 @@
 package com.m3rwallet.lifecycle;
 
+import com.m3rwallet.entity.Block;
+import com.m3rwallet.repository.BlockRepository;
+import com.m3rwallet.service.FeeDistributionService;
 import com.m3rwallet.service.PeerSyncService;
 import com.m3rwallet.service.MempoolService;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.event.EventListener;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.stereotype.Component;
 import lombok.extern.slf4j.Slf4j;
+
+import java.util.List;
 
 @Component
 @Slf4j
@@ -17,6 +23,15 @@ public class NodeStartupRecovery {
 
     @Autowired(required = false)
     private MempoolService mempoolService;
+
+    @Autowired(required = false)
+    private BlockRepository blockRepository;
+
+    @Autowired(required = false)
+    private FeeDistributionService feeDistributionService;
+
+    @Value("${app.blockchain.network:mainnet}")
+    private String network;
 
     @EventListener(ApplicationReadyEvent.class)
     public void onStartup() {
@@ -41,6 +56,21 @@ public class NodeStartupRecovery {
                     log.info("Mempool contains {} entries at startup", size);
                 } catch (Exception e) {
                     log.warn("Mempool check on startup failed: {}", e.getMessage());
+                }
+            }
+
+            if (blockRepository != null && feeDistributionService != null) {
+                try {
+                    List<Block> finalized = blockRepository.findByNetworkAndIsFinalized(network, true);
+                    int checked = 0;
+                    for (Block block : finalized) {
+                        feeDistributionService.reconcileFinalizedBlockFees(block, network);
+                        blockRepository.save(block);
+                        checked++;
+                    }
+                    log.info("Reconciled fee rewards for {} finalized blocks on {}", checked, network);
+                } catch (Exception e) {
+                    log.warn("Fee reward reconciliation on startup failed: {}", e.getMessage());
                 }
             }
         } catch (Exception e) {

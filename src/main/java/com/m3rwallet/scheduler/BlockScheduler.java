@@ -18,7 +18,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
-import org.springframework.stereotype.Component;
+import org.springframework.stereotype.Service;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 import java.util.List;
 import java.util.Set;
@@ -29,7 +30,8 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 import jakarta.annotation.PostConstruct;
 
-@Component
+@Service
+@EnableScheduling
 public class BlockScheduler {
     private static final Logger log = LoggerFactory.getLogger(BlockScheduler.class);
 
@@ -48,7 +50,7 @@ public class BlockScheduler {
     private final long slotDurationMs;
     private final int maxBlockSize;
 
-    private final AtomicBoolean isProposing = new AtomicBoolean(false);
+    private final AtomicBoolean running = new AtomicBoolean(false);
     private final AtomicLong lastProposedSlot = new AtomicLong(-1L);
     private final Set<Long> filledSlots = Collections.newSetFromMap(new ConcurrentHashMap<>());
 
@@ -68,8 +70,8 @@ public class BlockScheduler {
                           @Value("${app.node.self-url:http://localhost:3000}") String selfUrl,
                           @Value("${app.blockchain.network:mainnet}") String network,
                           @Value("${app.blockchain.skip-empty-blocks:true}") boolean skipEmptyBlocks,
-                          @Value("${app.validator.slot-duration-ms:15000}") long slotDurationMs,
-                          @Value("${app.blockchain.max-block-size:5000}") int maxBlockSize) {
+                          @Value("${app.blockchain.slot-ms:15000}") long slotDurationMs,
+                          @Value("${app.blockchain.max-block-size:500}") int maxBlockSize) {
         this.validatorService = validatorService;
         this.blockProposalService = blockProposalService;
         this.mempoolService = mempoolService;
@@ -96,9 +98,9 @@ public class BlockScheduler {
         }
     }
 
-    @Scheduled(fixedDelayString = "${app.validator.slot-duration-ms:15000}",
-            initialDelayString = "${app.validator.startup-proposal-delay-ms:15000}")
-    public void proposeBlockForCurrentSlot() {
+    @Scheduled(fixedDelayString = "${app.blockchain.slot-ms:15000}",
+            initialDelayString = "${app.blockchain.initial-delay-ms:8000}")
+    public void runSlot() {
         if (!validatorEnabled) return;
         long slotNumber = System.currentTimeMillis() / slotDurationMs;
         if (filledSlots.contains(slotNumber)) {
@@ -109,7 +111,7 @@ public class BlockScheduler {
         filledSlots.removeIf(s -> s < slotNumber - 10);
         log.info("[SLOT {}] Scheduler heartbeat", slotNumber);
         if (slotNumber == lastProposedSlot.get()) return;
-        if (isProposing.getAndSet(true)) return;
+        if (running.getAndSet(true)) return;
         try {
             Validator selected = validatorService.selectValidatorForSlot(slotNumber, network);
             double weight = (selected == null) ? 0.0 : validatorService.calculateWeight(selected);
@@ -143,26 +145,35 @@ public class BlockScheduler {
                 return;
             }
 
-            Block block = blockProposalService.buildBlock(slotNumber, selected, pending, network);
-            List<BlockTransaction> txs = blockProposalService.createBlockTransactions(pending, block);
-            Block saved = blockProposalService.saveBlock(block, txs);
-            // DO NOT finalize yet — broadcast for voting first
+            Block candidate = blockProposalService.buildBlock(slotNumber, selected, pending, network);
+            List<BlockTransaction> txs = blockProposalService.createBlockTransactions(pending, candidate);
+            // Do not persist the candidate until consensus is reached
             Block finalized = null;
             try {
-                log.info("[SLOT {}] Broadcasting block {} for consensus voting", slotNumber, saved.getBlockHeight());
+                log.info("[SLOT {}] Broadcasting block {} for consensus voting", slotNumber, candidate.getBlockHeight());
                 boolean consensusReached = false;
                 try {
-                    consensusReached = blockConsensusVoteService.collectVotes(saved, network);
+                    consensusReached = blockConsensusVoteService.collectVotes(candidate, network);
                 } catch (Exception e) {
                     log.warn("[SLOT {}] Vote collection failed: {}", slotNumber, e.getMessage());
                 }
                 if (consensusReached) {
                     try {
+                        Block saved = blockProposalService.saveBlock(candidate, txs); // persist only after YES
                         finalized = blockProposalService.finalizeBlock(saved, network);
+                        boolean feeOk = false;
                         try {
-                            feeDistributionService.distributeConsensusFees(finalized, network);
+                            feeDistributionService.distributeBlockFees(finalized, network);
+                            feeOk = true;
                         } catch (Exception e) {
                             log.warn("[SLOT {}] Fee distribution failed: {}", slotNumber, e.getMessage());
+                        }
+                        if (feeOk) {
+                            try {
+                                blockProposalService.saveBlock(finalized, null);
+                            } catch (Exception e) {
+                                log.warn("[SLOT {}] Could not persist feeDistributed flag: {}", slotNumber, e.getMessage());
+                            }
                         }
                         if (blockBroadcastService != null) {
                             blockBroadcastService.broadcastFinalizedBlock(finalized, network);
@@ -172,12 +183,8 @@ public class BlockScheduler {
                         log.warn("[SLOT {}] Finalize after consensus failed: {}", slotNumber, e.getMessage());
                     }
                 } else {
-                    try {
-                        blockProposalService.deleteBlock(saved);
-                    } catch (Exception e) {
-                        log.warn("[SLOT {}] Could not delete rejected block {}: {}", slotNumber, saved.getBlockHeight(), e.getMessage());
-                    }
-                    log.warn("[SLOT {}] Block {} rejected — no 2/3 consensus", slotNumber, saved.getBlockHeight());
+                    // Nothing was persisted; nothing to delete
+                    log.warn("[SLOT {}] Block {} rejected — no 2/3 consensus", slotNumber, candidate.getBlockHeight());
                 }
             } catch (Exception e) {
                 log.warn("[SLOT {}] Consensus broadcast failed (non-fatal): {}", slotNumber, e.getMessage());
@@ -207,13 +214,15 @@ public class BlockScheduler {
         } catch (Exception e) {
             log.error("[SLOT {}] Block proposal FAILED: {}", slotNumber, e.getMessage(), e);
         } finally {
-            isProposing.set(false);
+            running.set(false);
         }
     }
 
-    public void markSlotFilled(long slotNumber) {
-        filledSlots.add(slotNumber);
-        log.debug("[SLOT {}] Marked as filled by peer", slotNumber);
+    public void markSlotFilled(Long slotNumber) {
+        if (slotNumber != null) {
+            filledSlots.add(slotNumber);
+            log.debug("[SLOT {}] Marked as filled by peer", slotNumber);
+        }
     }
 
     @Scheduled(fixedRate = 60000)

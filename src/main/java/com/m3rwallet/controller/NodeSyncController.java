@@ -73,8 +73,19 @@ public class NodeSyncController {
         if (limit <= 0 || limit > 50) limit = 50;
         List<Block> blocks = blockRepository.findByNetworkAndIsFinalized(net, true);
         int count = Math.min(limit, blocks.size());
-        List<Block> slice = blocks.stream().sorted((a,b)->Long.compare(b.getBlockHeight(), a.getBlockHeight())).limit(count).toList();
-        Map<String, Object> resp = Map.of("network", net, "count", slice.size(), "blocks", slice, "latestBlockHeight", slice.stream().mapToLong(Block::getBlockHeight).max().orElse(0L));
+        List<Block> slice = blocks.stream()
+                .sorted((a, b) -> Long.compare(b.getBlockHeight(), a.getBlockHeight()))
+                .limit(count)
+                .toList();
+        long latestHeight = slice.stream().mapToLong(Block::getBlockHeight).max().orElse(0L);
+        // NOTE: `blocks` field omitted intentionally — serializing full Block entities with
+        // their @OneToMany relations causes Jackson circular-reference overflow.
+        // Callers that need block details should use GET /api/node/block/{height}.
+        Map<String, Object> resp = new HashMap<>(Map.of(
+                "network", net,
+                "count", slice.size(),
+                "latestBlockHeight", latestHeight
+        ));
         return ResponseEntity.ok(resp);
     }
 

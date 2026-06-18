@@ -27,11 +27,22 @@ public class MempoolService {
             long fee,
             long broadcastFee,
             long consensusFee,
+            long nonce,
             String broadcasterAddress,
             String network,
             long receivedAt,
             String rawTxHex
     ) {}
+
+    public long pendingFeeTotal(String network, java.util.function.Predicate<String> excludeTxHash) {
+        final String net = network;
+        java.util.function.Predicate<String> exclude = excludeTxHash == null ? h -> false : excludeTxHash;
+        return pendingTxs.values().stream()
+                .filter(tx -> net == null || net.equals(tx.network()))
+                .filter(tx -> tx.txHash() != null && !exclude.test(tx.txHash()))
+                .mapToLong(PendingTx::fee)
+                .sum();
+    }
 
     public boolean addTransaction(PendingTx tx) {
         try {

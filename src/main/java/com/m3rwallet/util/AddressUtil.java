@@ -93,6 +93,23 @@ public class AddressUtil {
         return null;
     }
 
+    /**
+     * Convert a stored address into the user-facing M3R Base58 format.
+     * Internal account/ledger rows use hex-20; validator/node addresses are
+     * already Base58 and should pass through unchanged.
+     */
+    public static String toDisplayAddress(String address) {
+        if (address == null || address.isBlank()) {
+            return address;
+        }
+        String normalized = normalizeAddr(address);
+        if (normalized != null && normalized.matches("^[0-9a-f]{40}$")) {
+            String encoded = encodeHex20ToBase58(normalized);
+            return encoded != null ? encoded : address;
+        }
+        return address;
+    }
+
     private static byte[] checksum(byte[] data) throws Exception {
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
         byte[] first = digest.digest(data);

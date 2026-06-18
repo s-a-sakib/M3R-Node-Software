@@ -16,4 +16,7 @@ public class TxSubmitRequest {
 
     @JsonProperty("pubKeyCompressedHex")
     private String pubKeyCompressedHex;
+
+    @JsonProperty("broadcasterAddress")
+    private String broadcasterAddress;
 }

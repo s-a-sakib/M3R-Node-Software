@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>M3R Public Node</title>
+  <style>
+    :root{
+      --bg:#f6f8fb;
+      --surface:#ffffff;
+      --surface-2:#f9fbff;
+      --ink:#111827;
+      --text:#25324a;
+      --muted:#667085;
+      --line:#dde5f0;
+      --blue:#0c6cf2;
+      --green:#008f6f;
+      --amber:#a96500;
+      --red:#b42318;
+      --mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace;
+      --ui:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--text);font-family:var(--ui)}
+    button,input,select{font:inherit}
+    button{cursor:pointer}
+    .shell{min-height:100vh}
+    .topbar{position:sticky;top:0;z-index:10;background:rgba(255,255,255,.96);border-bottom:1px solid var(--line);backdrop-filter:blur(10px)}
+    .topbar-inner{max-width:1240px;margin:0 auto;padding:15px 22px;display:flex;align-items:center;justify-content:space-between;gap:18px}
+    .brand{display:flex;align-items:center;gap:12px;color:var(--ink);font-weight:900;font-size:19px}
+    .brand-mark{width:36px;height:36px;border-radius:8px;background:var(--blue);color:#fff;display:grid;place-items:center;font-weight:950}
+    .toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+    select,input{border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink);padding:10px 12px;outline:none}
+    input{width:100%}
+    select:focus,input:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(12,108,242,.12)}
+    .btn{border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--blue);font-weight:850;padding:10px 13px}
+    .btn.primary{background:var(--blue);border-color:var(--blue);color:#fff}
+    .content{max-width:1240px;margin:0 auto;padding:26px 22px 48px}
+    .hero{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(320px,.9fr);gap:18px;align-items:stretch}
+    .summary{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:24px}
+    h1{margin:0;color:var(--ink);font-size:34px;line-height:1.12;letter-spacing:0}
+    .lede{margin:10px 0 0;color:var(--muted);font-size:15px;line-height:1.6;max-width:720px}
+    .node-address{margin-top:20px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2);padding:14px}
+    .label{display:block;color:var(--muted);font-size:12px;font-weight:850;text-transform:uppercase;margin-bottom:7px}
+    code,.mono{font-family:var(--mono)}
+    code{display:block;color:var(--ink);word-break:break-all;font-size:13px}
+    .status-card{background:linear-gradient(135deg,#0c6cf2,#087a77);border-radius:8px;color:#fff;padding:24px;display:grid;align-content:space-between;min-height:236px}
+    .status-row{display:flex;align-items:center;justify-content:space-between;gap:16px}
+    .pill{display:inline-flex;align-items:center;gap:7px;border-radius:999px;padding:7px 10px;font-size:12px;font-weight:850;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.28)}
+    .dot{width:8px;height:8px;border-radius:50%;background:currentColor}
+    .big-number{font-family:var(--mono);font-size:42px;font-weight:900;line-height:1;margin-top:10px}
+    .muted-light{color:rgba(255,255,255,.78);font-size:13px}
+    .metrics{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin-top:18px}
+    .metric{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:15px}
+    .metric span{display:block;color:var(--muted);font-size:12px;font-weight:850;text-transform:uppercase}
+    .metric strong{display:block;color:var(--ink);font-family:var(--mono);font-size:24px;margin-top:7px}
+    .grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px;margin-top:18px}
+    .panel{background:var(--surface);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+    .panel-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:17px 18px;border-bottom:1px solid var(--line)}
+    .panel-head h2{margin:0;color:var(--ink);font-size:17px}
+    .panel-head p{margin:4px 0 0;color:var(--muted);font-size:13px}
+    .form{padding:18px;display:grid;gap:10px}
+    .result{margin:0;border:1px solid var(--line);border-radius:8px;background:var(--surface-2);padding:11px;color:var(--muted);font-family:var(--mono);font-size:12px;white-space:pre-wrap;min-height:88px;max-height:220px;overflow:auto}
+    .tabs{display:flex;gap:8px;flex-wrap:wrap;padding:14px 18px;border-bottom:1px solid var(--line);background:#fbfdff}
+    .tab{border:1px solid var(--line);background:#fff;color:var(--muted);border-radius:999px;padding:8px 12px;font-weight:850;font-size:13px}
+    .tab.active{background:var(--blue);border-color:var(--blue);color:#fff}
+    .table-wrap{overflow:auto}
+    table{width:100%;border-collapse:collapse}
+    th{background:#fbfdff;color:var(--muted);font-size:12px;text-transform:uppercase;text-align:left;border-bottom:1px solid var(--line);padding:12px 14px;white-space:nowrap}
+    td{border-bottom:1px solid var(--line);padding:13px 14px;font-size:14px;vertical-align:middle}
+    tr:last-child td{border-bottom:0}
+    tbody tr.clickable{cursor:pointer}
+    tbody tr.clickable:hover{background:#f6f9ff}
+    .tag{display:inline-flex;border-radius:999px;padding:5px 8px;font-size:12px;font-weight:850}
+    .tag.green{background:#e8faf4;color:var(--green)}
+    .tag.amber{background:#fff6e5;color:var(--amber)}
+    .tag.red{background:#fff0ee;color:var(--red)}
+    .wide{grid-column:1/-1}
+    .drawer-bg{position:fixed;inset:0;background:rgba(17,24,39,.36);z-index:30;display:none}
+    .drawer-bg.open{display:block}
+    .drawer{position:fixed;right:0;top:0;bottom:0;width:min(720px,100vw);background:var(--surface);z-index:31;box-shadow:-20px 0 44px rgba(17,24,39,.18);transform:translateX(100%);transition:transform .18s ease;display:flex;flex-direction:column}
+    .drawer.open{transform:translateX(0)}
+    .drawer-head{padding:20px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
+    .drawer-title{font-size:18px;font-weight:900;color:var(--ink)}
+    .drawer-body{padding:20px;overflow:auto}
+    .detail-grid{display:grid;grid-template-columns:160px minmax(0,1fr);gap:10px;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+    .detail-grid div{padding:11px;border-bottom:1px solid var(--line)}
+    .detail-grid div:nth-child(odd){background:#fbfdff;color:var(--muted);font-weight:800}
+    .detail-grid div:nth-child(even){font-family:var(--mono);word-break:break-all}
+    .detail-grid div:nth-last-child(-n+2){border-bottom:0}
+    @media(max-width:900px){
+      .hero,.grid{grid-template-columns:1fr}
+      .metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
+      .topbar-inner{align-items:flex-start;flex-direction:column}
+    }
+    @media(max-width:560px){
+      .content,.topbar-inner{padding-left:16px;padding-right:16px}
+      .metrics{grid-template-columns:1fr}
+      h1{font-size:28px}
+      .toolbar{width:100%}
+      select,.toolbar .btn{flex:1}
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div class="brand"><div class="brand-mark">M3</div><div>M3R Public Node</div></div>
+        <div class="toolbar">
+          <select id="networkSelect" onchange="changeNetwork()">
+            <option value="mainnet">mainnet</option>
+            <option value="testnet">testnet</option>
+            <option value="legacy">legacy</option>
+          </select>
+          <button class="btn" type="button" onclick="loadAll()">Refresh</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="content">
+      <section class="hero">
+        <div class="summary">
+          <h1>Public M3R node explorer</h1>
+          <p class="lede">Read-only access to node health, account lookup, transaction status, blocks, mempool, and active validators.</p>
+          <div class="node-address">
+            <span class="label">Node address</span>
+            <code id="nodeAddress">loading...</code>
+          </div>
+        </div>
+        <div class="status-card">
+          <div class="status-row">
+            <div>
+              <div class="muted-light">Latest block</div>
+              <div class="big-number" id="latestBlock">0</div>
+            </div>
+            <span class="pill" id="healthPill"><span class="dot"></span><span id="nodeHealth">Online</span></span>
+          </div>
+          <div class="muted-light" id="identityMode">Checking identity...</div>
+        </div>
+      </section>
+
+      <section class="metrics">
+        <div class="metric"><span>Pending txs</span><strong id="pendingTxs">0</strong></div>
+        <div class="metric"><span>Finalized blocks</span><strong id="finalizedBlocks">0</strong></div>
+        <div class="metric"><span>Validators</span><strong id="activeValidators">0</strong></div>
+        <div class="metric"><span>Total supply</span><strong id="totalSupply">0.00</strong></div>
+        <div class="metric"><span>Network</span><strong id="networkLabel">mainnet</strong></div>
+      </section>
+
+      <section class="grid">
+        <div class="panel">
+          <div class="panel-head"><div><h2>Account Lookup</h2><p>Balance and nonce for a public address.</p></div></div>
+          <form class="form" onsubmit="event.preventDefault(); lookupAccount();">
+            <input id="accountInput" placeholder="Base58 or hex-20 address">
+            <button class="btn primary" type="submit">Lookup</button>
+            <pre class="result" id="accountResult">No account selected.</pre>
+          </form>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><div><h2>Transaction Status</h2><p>Check a transaction hash.</p></div></div>
+          <form class="form" onsubmit="event.preventDefault(); lookupTx();">
+            <input id="txHashInput" placeholder="64-char tx hash">
+            <button class="btn primary" type="submit">Check Status</button>
+            <pre class="result" id="txResult">No transaction selected.</pre>
+          </form>
+        </div>
+
+        <div class="panel wide">
+          <div class="panel-head">
+            <div><h2>Explorer</h2><p>Public chain state from this node.</p></div>
+            <button class="btn" type="button" onclick="loadExplorer()">Reload</button>
+          </div>
+          <div class="tabs">
+            <button class="tab active" type="button" data-tab="blocks" onclick="switchTab('blocks')">Blocks</button>
+            <button class="tab" type="button" data-tab="accounts" onclick="switchTab('accounts')">Accounts</button>
+            <button class="tab" type="button" data-tab="transactions" onclick="switchTab('transactions')">Transactions</button>
+            <button class="tab" type="button" data-tab="mempool" onclick="switchTab('mempool')">Mempool</button>
+            <button class="tab" type="button" data-tab="validators" onclick="switchTab('validators')">Validators</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead id="explorerHead"></thead>
+              <tbody id="explorerBody"><tr><td class="muted">Loading...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="drawer-bg" id="drawerBg" onclick="closeDrawer()"></div>
+  <aside class="drawer" id="drawer">
+    <div class="drawer-head">
+      <div>
+        <div class="drawer-title" id="drawerTitle">Block detail</div>
+        <div class="muted" id="drawerSubtitle">Full block payload</div>
+      </div>
+      <button class="btn" type="button" onclick="closeDrawer()">Close</button>
+    </div>
+    <div class="drawer-body" id="drawerBody"></div>
+  </aside>
+
+  <script>
+    let network = 'mainnet';
+    let activeTab = 'blocks';
+
+    const endpoints = {
+      nodeStatus: () => `/${network}/node/status`,
+      stats: () => `/${network}/stats`,
+      nodeAccount: (addr) => `/${network}/account?addr=${encodeURIComponent(addr)}`,
+      blocks: () => `/${network}/blocks?page=0&size=20`,
+      block: (height) => `/${network}/blocks/${height}`,
+      accounts: () => `/${network}/accounts?page=0&size=20`,
+      transactions: () => `/${network}/transactions?page=0&size=20`,
+      mempool: () => `/${network}/mempool`,
+      validators: () => `/${network}/validators`
+    };
+
+    function el(id){ return document.getElementById(id); }
+    function escapeHtml(value){
+      return String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+    }
+    function shortValue(value,left=12,right=7){
+      const s = String(value ?? '');
+      if (!s || s.length <= left + right + 3) return s;
+      return s.slice(0,left) + '...' + s.slice(-right);
+    }
+    function pretty(data){ return JSON.stringify(data, null, 2); }
+    function formatAge(ts){
+      if (!ts) return '-';
+      const s = Math.max(0, Math.floor((Date.now() - Number(ts)) / 1000));
+      if (s < 60) return s + 's ago';
+      if (s < 3600) return Math.floor(s / 60) + 'm ago';
+      if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+      return Math.floor(s / 86400) + 'd ago';
+    }
+    function formatBdt(raw, places = 2){
+      const value = Number(raw ?? 0) / 100;
+      if (!Number.isFinite(value)) return '0.00';
+      return value.toLocaleString('en-US', { minimumFractionDigits: places, maximumFractionDigits: places }) + ' BDT';
+    }
+    async function jsonFetch(url, options){
+      const res = await fetch(url, options);
+      const text = await res.text();
+      let body = {};
+      try { body = text ? JSON.parse(text) : {}; } catch(e) { body = {raw:text}; }
+      if (!res.ok) throw body;
+      return body;
+    }
+
+    function changeNetwork(){
+      network = el('networkSelect').value;
+      el('networkLabel').textContent = network;
+      loadAll();
+    }
+
+    async function loadAll(){
+      await Promise.allSettled([loadOverview(), loadExplorer()]);
+    }
+
+    async function loadOverview(){
+      try {
+        const [status, stats] = await Promise.all([
+          jsonFetch(endpoints.nodeStatus()),
+          jsonFetch(endpoints.stats())
+        ]);
+        el('latestBlock').textContent = status.latestBlockHeight ?? '0';
+        el('pendingTxs').textContent = status.pendingTxs ?? status.mempoolPending ?? stats.pendingTxs ?? '0';
+        el('finalizedBlocks').textContent = stats.finalizedBlocks ?? '0';
+        el('activeValidators').textContent = stats.activeValidators ?? '0';
+        el('totalSupply').textContent = formatBdt(stats.totalSupply ?? 0);
+        el('nodeHealth').textContent = status.status === 'OK' ? 'Online' : 'Unknown';
+        el('nodeAddress').textContent = status.nodeAddress || 'unknown';
+        el('identityMode').textContent = status.privateKeyBacked ? 'Key-backed node identity' : 'Address-only node identity';
+      } catch(error) {
+        el('nodeHealth').textContent = 'Offline';
+        el('nodeAddress').textContent = 'unavailable';
+      }
+    }
+
+    function switchTab(tab){
+      activeTab = tab;
+      document.querySelectorAll('.tab').forEach(btn => btn.classList.toggle('active', btn.dataset.tab === tab));
+      loadExplorer();
+    }
+
+    async function loadExplorer(){
+      if (activeTab === 'mempool') return renderMempool();
+      if (activeTab === 'validators') return renderValidators();
+      if (activeTab === 'accounts') return renderAccounts();
+      if (activeTab === 'transactions') return renderTransactions();
+      return renderBlocks();
+    }
+
+    async function renderBlocks(){
+      el('explorerHead').innerHTML = '<tr><th>Height</th><th>Hash</th><th>Proposer</th><th>Txs</th><th>Status</th><th>Age</th></tr>';
+      try {
+        const data = await jsonFetch(endpoints.blocks());
+        const rows = data.blocks || [];
+        el('explorerBody').innerHTML = rows.length ? rows.map(row => `
+          <tr class="clickable" onclick="openBlock(${Number(row.blockHeight)})">
+            <td class="mono" style="color:var(--blue);font-weight:850">${escapeHtml(row.blockHeight)}</td>
+            <td class="mono">${escapeHtml(shortValue(row.blockHash, 14, 8))}</td>
+            <td class="mono">${escapeHtml(shortValue(row.proposerAddress, 10, 6))}</td>
+            <td class="mono">${escapeHtml(row.txCount ?? 0)}</td>
+            <td>${row.isFinalized ? '<span class="tag green">Finalized</span>' : '<span class="tag amber">Pending</span>'}</td>
+            <td class="muted">${escapeHtml(formatAge(row.timestamp))}</td>
+          </tr>
+        `).join('') : '<tr><td colspan="6" class="muted">No blocks found.</td></tr>';
+      } catch(error) {
+        el('explorerBody').innerHTML = '<tr><td colspan="6" class="muted">Could not load blocks.</td></tr>';
+      }
+    }
+
+    async function renderAccounts(){
+      el('explorerHead').innerHTML = '<tr><th>Address</th><th>Balance</th><th>Nonce</th><th>Network</th></tr>';
+      try {
+        const data = await jsonFetch(endpoints.accounts());
+        const rows = data.content || [];
+        el('explorerBody').innerHTML = rows.length ? rows.map(row => `
+          <tr>
+            <td class="mono">${escapeHtml(shortValue(row.address, 16, 8))}</td>
+            <td class="mono">${escapeHtml(formatBdt(row.balance ?? 0, 2))}</td>
+            <td class="mono">${escapeHtml(row.nonce ?? 0)}</td>
+            <td>${escapeHtml(row.network)}</td>
+          </tr>
+        `).join('') : '<tr><td colspan="4" class="muted">No accounts found.</td></tr>';
+      } catch(error) {
+        el('explorerBody').innerHTML = '<tr><td colspan="4" class="muted">Could not load accounts.</td></tr>';
+      }
+    }
+
+    async function renderTransactions(){
+      el('explorerHead').innerHTML = '<tr><th>Hash</th><th>Status</th><th>Network</th><th>Age</th></tr>';
+      try {
+        const data = await jsonFetch(endpoints.transactions());
+        const rows = data.content || [];
+        el('explorerBody').innerHTML = rows.length ? rows.map(row => `
+          <tr>
+            <td class="mono">${escapeHtml(shortValue(row.hash, 16, 8))}</td>
+            <td><span class="tag ${row.status === 'CONFIRMED' ? 'green' : row.status === 'REJECTED' ? 'red' : 'amber'}">${escapeHtml(row.status)}</span></td>
+            <td>${escapeHtml(row.network)}</td>
+            <td class="muted">${escapeHtml(formatAge(row.createdAt))}</td>
+          </tr>
+        `).join('') : '<tr><td colspan="4" class="muted">No transactions found.</td></tr>';
+      } catch(error) {
+        el('explorerBody').innerHTML = '<tr><td colspan="4" class="muted">Could not load transactions.</td></tr>';
+      }
+    }
+
+    async function renderMempool(){
+      el('explorerHead').innerHTML = '<tr><th>Hash</th><th>Sender</th><th>Recipient</th><th>Fee</th></tr>';
+      try {
+        const data = await jsonFetch(endpoints.mempool());
+        const rows = data.transactions || [];
+        el('explorerBody').innerHTML = rows.length ? rows.map(row => `
+          <tr>
+            <td class="mono">${escapeHtml(shortValue(row.txHash, 14, 8))}</td>
+            <td class="mono">${escapeHtml(shortValue(row.sender, 10, 6))}</td>
+            <td class="mono">${escapeHtml(shortValue(row.recipient, 10, 6))}</td>
+            <td class="mono">${escapeHtml(formatBdt(row.fee ?? 0, 4))}</td>
+          </tr>
+        `).join('') : '<tr><td colspan="4" class="muted">Mempool is empty.</td></tr>';
+      } catch(error) {
+        el('explorerBody').innerHTML = '<tr><td colspan="4" class="muted">Could not load mempool.</td></tr>';
+      }
+    }
+
+    async function renderValidators(){
+      el('explorerHead').innerHTML = '<tr><th>Address</th><th>Stake</th><th>Weight</th><th>Proposals</th></tr>';
+      try {
+        const data = await jsonFetch(endpoints.validators());
+        const rows = data.validators || [];
+        el('explorerBody').innerHTML = rows.length ? rows.map(row => `
+          <tr>
+            <td class="mono">${escapeHtml(shortValue(row.address, 14, 8))}</td>
+            <td class="mono">${escapeHtml(row.stakedAmount ?? 0)}</td>
+            <td class="mono">${escapeHtml(Number(row.weight || 0).toFixed(4))}</td>
+            <td class="mono">${escapeHtml(row.successfulProposals ?? 0)}/${escapeHtml(row.totalProposals ?? 0)}</td>
+          </tr>
+        `).join('') : '<tr><td colspan="4" class="muted">No active validators.</td></tr>';
+      } catch(error) {
+        el('explorerBody').innerHTML = '<tr><td colspan="4" class="muted">Could not load validators.</td></tr>';
+      }
+    }
+
+    async function lookupAccount(){
+      const addr = el('accountInput').value.trim();
+      if (!addr) return el('accountResult').textContent = 'Address is required.';
+      try { el('accountResult').textContent = pretty(await jsonFetch(endpoints.nodeAccount(addr))); }
+      catch(error) { el('accountResult').textContent = pretty(error); }
+    }
+
+    async function lookupTx(){
+      const hash = el('txHashInput').value.trim();
+      if (!hash) return el('txResult').textContent = 'Transaction hash is required.';
+      try { el('txResult').textContent = pretty(await jsonFetch(`/${network}/tx/status?hash=${encodeURIComponent(hash)}`)); }
+      catch(error) { el('txResult').textContent = pretty(error); }
+    }
+
+    async function openBlock(height){
+      openDrawer('Block #' + height, 'Loading full block data...');
+      try {
+        const block = await jsonFetch(endpoints.block(height));
+        const fields = [
+          ['Height', block.blockHeight],
+          ['Network', block.network],
+          ['Status', block.isFinalized ? 'FINALIZED' : 'PENDING'],
+          ['Hash', block.blockHash],
+          ['Parent Hash', block.parentBlockHash],
+          ['Slot', block.slotNumber],
+          ['Timestamp', block.timestamp],
+          ['Age', formatAge(block.timestamp)],
+          ['Proposer', block.proposerAddress],
+          ['Weight', block.proposerWeight],
+          ['Merkle Root', block.merkleRoot],
+          ['Tx Count', block.txCount]
+        ];
+        const details = `<div class="detail-grid">${fields.map(([k,v]) => `<div>${escapeHtml(k)}</div><div>${escapeHtml(v ?? '-')}</div>`).join('')}</div>`;
+        const txRows = (block.transactions || []).map(tx => `
+          <tr>
+            <td class="mono">${escapeHtml(shortValue(tx.txHash, 14, 8))}</td>
+            <td class="mono">${escapeHtml(shortValue(tx.sender, 10, 6))}</td>
+            <td class="mono">${escapeHtml(shortValue(tx.recipient, 10, 6))}</td>
+            <td class="mono">${escapeHtml(formatBdt(tx.value ?? 0, 2))}</td>
+            <td class="mono">${escapeHtml(formatBdt(tx.totalFee ?? 0, 4))}</td>
+            <td>${escapeHtml(tx.status ?? '-')}</td>
+          </tr>
+        `).join('');
+        el('drawerSubtitle').textContent = 'Hash ' + shortValue(block.blockHash, 18, 10);
+        el('drawerBody').innerHTML = details + `
+          <div class="panel" style="box-shadow:none;margin-top:18px">
+            <div class="panel-head"><div><h2>Block Transactions</h2><p>${(block.transactions || []).length} transaction records</p></div></div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Hash</th><th>Sender</th><th>Recipient</th><th>Value</th><th>Total Fee</th><th>Status</th></tr></thead>
+                <tbody>${txRows || '<tr><td colspan="6" class="muted">No transactions in this block.</td></tr>'}</tbody>
+              </table>
+            </div>
+          </div>
+          <div style="margin-top:18px"><span class="label">Raw block JSON</span><pre class="result">${escapeHtml(pretty(block))}</pre></div>
+        `;
+      } catch(error) {
+        el('drawerBody').innerHTML = '<pre class="result">' + escapeHtml(pretty(error)) + '</pre>';
+      }
+    }
+
+    function openDrawer(title, subtitle){
+      el('drawerTitle').textContent = title;
+      el('drawerSubtitle').textContent = subtitle;
+      el('drawerBody').innerHTML = '<div class="muted">Loading...</div>';
+      el('drawerBg').classList.add('open');
+      el('drawer').classList.add('open');
+    }
+
+    function closeDrawer(){
+      el('drawerBg').classList.remove('open');
+      el('drawer').classList.remove('open');
+    }
+
+    loadAll();
+    setInterval(loadAll, 15000);
+  </script>
+</body>
+</html>

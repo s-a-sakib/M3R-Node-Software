@@ -13,15 +13,22 @@ import org.apache.commons.codec.binary.Hex;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Isolation;
 
 import java.math.BigInteger;
 import java.security.MessageDigest;
 import java.util.Arrays;
+import java.util.Objects;
 
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class WalletService {
+    public record VerifiedTxInfo(String senderAddress, BigInteger nonce) {}
+
+    private static final int TX_HASH_LOCK_STRIPES = 4096;
+    private final Object[] txHashLocks = createTxHashLocks();
+
     private final AccountService accountService;
     private final TransactionService transactionService;
     private final EscrowService escrowService;
@@ -68,12 +75,17 @@ public class WalletService {
 
     public Account getAccountInfo(String network, String addr) {
         String normalizedAddr = AddressUtil.resolveToHex20(addr);
-        if (normalizedAddr == null || normalizedAddr.isEmpty()) {
+        String rawAddr = addr == null ? null : addr.trim();
+        if ((normalizedAddr == null || normalizedAddr.isEmpty()) && (rawAddr == null || rawAddr.isEmpty())) {
             return null;
         }
 
-        Account account = accountService.getAccount(network, normalizedAddr);
-        log.info("[ACCOUNT][{}] {} => balance={} nonce={}", network, normalizedAddr,
+        Account account = normalizedAddr == null ? null : accountService.getAccount(network, normalizedAddr);
+        if (account == null && rawAddr != null && !rawAddr.equalsIgnoreCase(normalizedAddr)) {
+            account = accountService.getAccount(network, rawAddr);
+        }
+        String loggedAddress = account != null ? account.getAddress() : (normalizedAddr != null ? normalizedAddr : rawAddr);
+        log.info("[ACCOUNT][{}] {} => balance={} nonce={}", network, loggedAddress,
                 account != null ? account.getBalance() : "0",
                 account != null ? account.getNonce() : "0");
         return account;
@@ -105,7 +117,7 @@ public class WalletService {
         }
         BigInteger currentBal = new BigInteger(state.getBalance());
         BigInteger newBal = currentBal.add(amount);
-        accountService.setAccount(network, normalizedAddr, newBal, state.getNonce());
+        accountService.updateAccountInPlace(state, network, normalizedAddr, newBal, state.getNonce());
         log.info("[FAUCET][{}] {} += {} => {}", network, normalizedAddr, amount, newBal);
     }
 
@@ -122,15 +134,37 @@ public class WalletService {
         return txHash;
     }
 
-    @Transactional
+    public VerifiedTxInfo getVerifiedTransactionInfo(String rawTxHex, String pubKeyCompressedHex) {
+        TxDecoder.ParsedTx tx = parseAndVerifyTransaction(rawTxHex, pubKeyCompressedHex);
+        return new VerifiedTxInfo(tx.getFromAddr20(), tx.getNonce());
+    }
+
+    public long getCurrentNonce(String network, String senderAddress) {
+        Account account = accountService.getAccount(network, senderAddress);
+        return account == null || account.getNonce() == null ? 0L : account.getNonce();
+    }
+
+    @Transactional(isolation = Isolation.SERIALIZABLE)
     public String executeTransaction(String network, String rawTxHex, String pubKeyCompressedHex) {
+        return executeTransaction(network, rawTxHex, pubKeyCompressedHex, null);
+    }
+
+    @Transactional(isolation = Isolation.SERIALIZABLE)
+    public String executeTransaction(String network, String rawTxHex, String pubKeyCompressedHex, String broadcasterAddress) {
         TxDecoder.ParsedTx tx = parseAndVerifyTransaction(rawTxHex, pubKeyCompressedHex);
         String txHash = computeTxHash(rawTxHex);
+        synchronized (lockForTxHash(network, txHash)) {
+            return executeTransactionLocked(network, rawTxHex, pubKeyCompressedHex, broadcasterAddress, tx, txHash);
+        }
+    }
 
+    private String executeTransactionLocked(String network, String rawTxHex, String pubKeyCompressedHex,
+                                            String broadcasterAddress, TxDecoder.ParsedTx tx, String txHash) {
         // ---- Replay protection (global by hash) ----
         try {
-            if (transactionRepository != null && transactionRepository.existsByTxHash(txHash)) {
-                throw new IllegalArgumentException("Tx already known (replay)");
+            if (transactionRepository != null && transactionRepository.existsByHash(txHash)) {
+                log.info("[EXECUTE] Transaction {} already processed", txHash);
+                return txHash; // idempotent: already processed
             }
         } catch (Exception e) {
             log.warn("Replay protection check failed (non-fatal): {}", e.getMessage());
@@ -151,9 +185,11 @@ public class WalletService {
         }
 
         BigInteger nonceFromUser = tx.getNonce();
-        if (nonceFromUser.compareTo(BigInteger.valueOf(fromState.getNonce())) <= 0) {
+        BigInteger expectedNonce = BigInteger.valueOf(fromState.getNonce()).add(BigInteger.ONE);
+        if (!nonceFromUser.equals(expectedNonce)) {
             throw new IllegalArgumentException(
-                    "Nonce too low (tx=" + nonceFromUser + ", ledger=" + fromState.getNonce() + ")");
+                    "Invalid nonce (tx=" + nonceFromUser + ", expected=" + expectedNonce
+                            + ", ledger=" + fromState.getNonce() + ")");
         }
 
         BigInteger currentBal = new BigInteger(fromState.getBalance());
@@ -168,15 +204,13 @@ public class WalletService {
                 ? tx.getParsedPayload().getAmount()
                 : BigInteger.ZERO;
 
-        // === BLOCKCHAIN: Calculate fees ===
+        // === BLOCKCHAIN: Split the actual signed transaction fee ===
         long broadcastFee = 0L;
         long consensusFee = 0L;
-        long totalFee = 0L;
+        long totalFee = tx.getFee().longValueExact();
         try {
             if (feeDistributionService != null) {
-                int txSizeBytes = rawTxHex.length() / 2;
-                var fees = feeDistributionService
-                        .calculateFees(txSizeBytes);
+                var fees = feeDistributionService.splitTotalFee(totalFee);
                 broadcastFee = fees.broadcastFee();
                 consensusFee = fees.consensusFee();
                 totalFee     = fees.totalFee();
@@ -190,10 +224,12 @@ public class WalletService {
 
         String executedTxHash = executeParsedTransaction(network, tx, txHash, fromState, currentBal, nonceFromUser, now);
 
-        // === BLOCKCHAIN: Add to mempool + record broadcast fee ===
+        // === BLOCKCHAIN: Add to mempool; fee rewards are paid after block finalization ===
         try {
             if (mempoolService != null) {
-                String broadcaster = getThisNodeAddress();
+                String broadcaster = (broadcasterAddress == null || broadcasterAddress.isBlank())
+                        ? getThisNodeAddress()
+                        : broadcasterAddress;
 
                 MempoolService.PendingTx pendingTx =
                         new MempoolService.PendingTx(
@@ -204,6 +240,7 @@ public class WalletService {
                                 totalFee,             // long fee
                                 broadcastFee,         // long broadcastFee
                                 consensusFee,         // long consensusFee
+                                nonceFromUser.longValueExact(), // long nonce
                                 broadcaster,          // String broadcasterAddress
                                 network,              // String network
                                 System.currentTimeMillis(), // long receivedAt
@@ -213,16 +250,6 @@ public class WalletService {
                 boolean added = mempoolService.addTransaction(pendingTx);
                 log.debug("Tx {} {} mempool",
                         txHash, added ? "added to" : "already in");
-
-                if (feeDistributionService != null && broadcastFee > 0) {
-                    feeDistributionService.recordBroadcastFee(
-                            txHash,
-                            broadcaster,
-                            network,
-                            broadcastFee,
-                            null   // blockHeight not known yet
-                    );
-                }
             }
         } catch (Exception e) {
             // MUST NOT affect tx result
@@ -287,9 +314,11 @@ public class WalletService {
         }
 
         BigInteger nonceFromUser = tx.getNonce();
-        if (nonceFromUser.compareTo(BigInteger.valueOf(fromState.getNonce())) <= 0) {
+        BigInteger expectedNonce = BigInteger.valueOf(fromState.getNonce()).add(BigInteger.ONE);
+        if (!nonceFromUser.equals(expectedNonce)) {
             throw new IllegalArgumentException(
-                    "Nonce too low (tx=" + nonceFromUser + ", ledger=" + fromState.getNonce() + ")");
+                    "Invalid nonce (tx=" + nonceFromUser + ", expected=" + expectedNonce
+                            + ", ledger=" + fromState.getNonce() + ")");
         }
 
         BigInteger currentBal = new BigInteger(fromState.getBalance());
@@ -367,10 +396,10 @@ public class WalletService {
                 throw new IllegalArgumentException("Insufficient funds");
             }
 
-            // Update sender
-            fromState.setBalance(currentBal.subtract(totalCost).toString());
-            fromState.setNonce(nonceFromUser.longValue());
-            accountService.setAccount(network, tx.getFromAddr20(),
+                // Update sender
+                fromState.setBalance(currentBal.subtract(totalCost).toString());
+                fromState.setNonce(nonceFromUser.longValue());
+                accountService.updateAccountInPlace(fromState, network, tx.getFromAddr20(),
                     new BigInteger(fromState.getBalance()), fromState.getNonce());
 
             // Update recipient
@@ -382,7 +411,7 @@ public class WalletService {
                 toState.setNonce(0L);
             }
             BigInteger toCurBal = new BigInteger(toState.getBalance());
-            accountService.setAccount(network, toAddr, toCurBal.add(amount), toState.getNonce());
+            accountService.updateAccountInPlace(toState, network, toAddr, toCurBal.add(amount), toState.getNonce());
 
             // Ledger: sender sees SEND, recipient sees RECEIVE
             String amtStr = amount.toString();
@@ -412,10 +441,10 @@ public class WalletService {
                 throw new IllegalArgumentException("Escrow ID exists");
             }
 
-            // Deduct from buyer
-            fromState.setBalance(currentBal.subtract(totalCost).toString());
-            fromState.setNonce(nonceFromUser.longValue());
-            accountService.setAccount(network, tx.getFromAddr20(),
+                // Deduct from buyer
+                fromState.setBalance(currentBal.subtract(totalCost).toString());
+                fromState.setNonce(nonceFromUser.longValue());
+                accountService.updateAccountInPlace(fromState, network, tx.getFromAddr20(),
                     new BigInteger(fromState.getBalance()), fromState.getNonce());
 
             String buyer  = tx.getParsedPayload().getBuyer();
@@ -475,22 +504,22 @@ public class WalletService {
                 throw new IllegalArgumentException("Insufficient fee");
             }
 
-            // Deduct fee from releasor
-            fromState.setBalance(currentBal.subtract(fee).toString());
-            fromState.setNonce(nonceFromUser.longValue());
-            accountService.setAccount(network, tx.getFromAddr20(),
+                // Deduct fee from releasor
+                fromState.setBalance(currentBal.subtract(fee).toString());
+                fromState.setNonce(nonceFromUser.longValue());
+                accountService.updateAccountInPlace(fromState, network, tx.getFromAddr20(),
                     new BigInteger(fromState.getBalance()), fromState.getNonce());
 
             // Credit seller
             String sellerAddr = tx.getParsedPayload().getToAddr();
-            Account toState = accountService.getAccountForUpdate(network, sellerAddr);
+                Account toState = accountService.getAccountForUpdate(network, sellerAddr);
             if (toState == null) {
                 toState = new Account();
                 toState.setBalance("0");
                 toState.setNonce(0L);
             }
             BigInteger toCurBal = new BigInteger(toState.getBalance());
-            accountService.setAccount(network, sellerAddr,
+                accountService.updateAccountInPlace(toState, network, sellerAddr,
                     toCurBal.add(new BigInteger(escrow.getAmount())), toState.getNonce());
 
             escrowService.deleteEscrow(network, escrowId);
@@ -531,22 +560,22 @@ public class WalletService {
                 throw new IllegalArgumentException("Insufficient fee");
             }
 
-            // Deduct fee from refunder
-            fromState.setBalance(currentBal.subtract(fee).toString());
-            fromState.setNonce(nonceFromUser.longValue());
-            accountService.setAccount(network, tx.getFromAddr20(),
+                // Deduct fee from refunder
+                fromState.setBalance(currentBal.subtract(fee).toString());
+                fromState.setNonce(nonceFromUser.longValue());
+                accountService.updateAccountInPlace(fromState, network, tx.getFromAddr20(),
                     new BigInteger(fromState.getBalance()), fromState.getNonce());
 
             // Credit buyer
             String buyerAddr = tx.getParsedPayload().getToAddr();
-            Account toState = accountService.getAccountForUpdate(network, buyerAddr);
+                Account toState = accountService.getAccountForUpdate(network, buyerAddr);
             if (toState == null) {
                 toState = new Account();
                 toState.setBalance("0");
                 toState.setNonce(0L);
             }
             BigInteger toCurBal = new BigInteger(toState.getBalance());
-            accountService.setAccount(network, buyerAddr,
+                accountService.updateAccountInPlace(toState, network, buyerAddr,
                     toCurBal.add(new BigInteger(escrow.getAmount())), toState.getNonce());
 
             escrowService.deleteEscrow(network, escrowId);
@@ -577,5 +606,18 @@ public class WalletService {
     public String getTxStatus(String network, String txHash) {
         Transaction tx = transactionService.getTx(network, txHash);
         return tx != null ? tx.getStatus() : "UNKNOWN";
+    }
+
+    private Object lockForTxHash(String network, String txHash) {
+        int index = Math.floorMod(Objects.hash(network, txHash), txHashLocks.length);
+        return txHashLocks[index];
+    }
+
+    private static Object[] createTxHashLocks() {
+        Object[] locks = new Object[TX_HASH_LOCK_STRIPES];
+        for (int i = 0; i < locks.length; i++) {
+            locks[i] = new Object();
+        }
+        return locks;
     }
 }

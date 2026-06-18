@@ -88,9 +88,15 @@ public class BlockConsensusVoteService {
                 }
             }
 
+            // Require at least one peer confirmation — never self-certify
+            if (yesVotes <= 1) {
+                log.warn("[BLOCK VOTE] Insufficient peer confirmations (only self). Rejecting.");
+                return false;
+            }
+
             double weightRatio = totalWeight > 0 ? approvedWeight / totalWeight : 0;
             int totalPeers = peers.size() + 1;
-            boolean reached = weightRatio >= (2.0 / 3.0) || yesVotes >= Math.ceil(totalPeers * 2.0 / 3.0);
+            boolean reached = weightRatio >= (2.0 / 3.0) && yesVotes >= Math.ceil(totalPeers * 2.0 / 3.0);
 
             log.info("[BLOCK VOTE] Height={} Votes={}/{} Weight={}/{} ({}%) Consensus={}",
                     block.getBlockHeight(), yesVotes, totalPeers,
@@ -109,9 +115,9 @@ public class BlockConsensusVoteService {
             String myAddr = nodeIdentityService != null ? nodeIdentityService.getNodeAddress() : "";
             return validatorRepository.findByAddressAndNetwork(myAddr, network)
                     .map(v -> validatorService.calculateWeight(v))
-                    .orElse(1.0);
+                    .orElse(0.0);
         } catch (Exception e) {
-            return 1.0;
+            return 0.0;
         }
     }
 
@@ -119,9 +125,9 @@ public class BlockConsensusVoteService {
         try {
             return validatorRepository.findByAddressAndNetwork(address, network)
                     .map(v -> validatorService.calculateWeight(v))
-                    .orElse(1.0);
+                    .orElse(0.0);
         } catch (Exception e) {
-            return 1.0;
+            return 0.0;
         }
     }
 
@@ -132,7 +138,7 @@ public class BlockConsensusVoteService {
                     .mapToDouble(v -> validatorService.calculateWeight(v))
                     .sum();
         } catch (Exception e) {
-            return 1.0;
+            return 0.0;
         }
     }
 }

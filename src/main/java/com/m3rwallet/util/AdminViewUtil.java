@@ -29,17 +29,8 @@ public class AdminViewUtil {
     }
 
     public String address(String storedAddress) {
-        if (storedAddress == null || storedAddress.isBlank()) {
-            return "";
-        }
-
-        String normalized = AddressUtil.normalizeAddr(storedAddress);
-        if (normalized != null && normalized.matches("^[0-9a-f]{40}$")) {
-            String encoded = AddressUtil.encodeHex20ToBase58(normalized);
-            return encoded != null ? encoded : storedAddress;
-        }
-
-        return storedAddress;
+        String displayAddress = AddressUtil.toDisplayAddress(storedAddress);
+        return displayAddress == null ? "" : displayAddress;
     }
 
     public boolean contains(String value, String query) {

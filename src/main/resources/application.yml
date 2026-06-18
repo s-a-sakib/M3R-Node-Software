@@ -8,8 +8,8 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
       connection-timeout: 30000
-      maximum-pool-size: 10
-      minimum-idle: 2
+      maximum-pool-size: 20
+      minimum-idle: 5
       auto-commit: true
       pool-name: M3R-Pool
   jpa:
@@ -40,14 +40,20 @@ logging:
 
 # Application Configuration
 app:
+  admin:
+    username: ${M3R_ADMIN_USERNAME:hululuadmin}
+    password: ${M3R_ADMIN_PASSWORD:puripuri saitama}
   broadcast-fee: 100
   percent-fee-bps: 100
   genesis-address: NQWWb4huPaqUncdJHFm2FHFjTo1qqLskuq
   consensus:
-    enabled: false
+    enabled: true
     timeout-ms: 2500
-    shared-secret: ""
-    peers: []
+    shared-secret: "local-test-secret"
+    peers:
+      - http://localhost:3000
+      - http://localhost:4000
+      - http://localhost:5000
   cors-origins: 
   faucet:
     max-amount: 100000
@@ -79,12 +85,14 @@ app:
 
   blockchain:
     network: mainnet
-    max-block-size: 5000
+    slot-ms: 15000
+    initial-delay-ms: 8000
+    max-block-size: 500
     skip-empty-blocks: true
     finality-confirmations: 2
 
   node:
-    self-url: ${NODE_SELF_URL:http://localhost:3000}
+    self-url: http://localhost:${server.port:3000}
     bootstrap-peers: ${NODE_BOOTSTRAP_PEERS:}
     private-key: ${M3R_NODE_PRIVATE_KEY:}
     block-sync-interval-ms: 10000

@@ -179,7 +179,7 @@
             <div class="wallet-row">
               <div>
                 <div class="eyebrow" id="heroNetwork">Mainnet node wallet</div>
-                <div class="balance"><span id="nodeBalance">0</span> M3R</div>
+                <div class="balance"><span id="nodeBalance">0.00</span> BDT</div>
               </div>
               <div class="eyebrow" id="identityMode">Address only</div>
             </div>
@@ -201,6 +201,7 @@
               <div class="metric"><span>Pending txs</span><strong id="pendingTxs">0</strong></div>
               <div class="metric"><span>Finalized blocks</span><strong id="finalizedBlocks">0</strong></div>
               <div class="metric"><span>Validators</span><strong id="activeValidators">0</strong></div>
+              <div class="metric"><span>Total supply</span><strong id="totalSupply">0.00</strong></div>
             </div>
           </section>
         </div>
@@ -360,9 +361,18 @@
       if (s < 86400) return Math.floor(s / 3600) + 'h ago';
       return Math.floor(s / 86400) + 'd ago';
     }
+    function formatBdt(raw, places = 2){
+      const value = Number(raw ?? 0) / 100;
+      if (!Number.isFinite(value)) return '0.00';
+      return value.toLocaleString('en-US', { minimumFractionDigits: places, maximumFractionDigits: places }) + ' BDT';
+    }
     function formatBalance(raw){
-      const v = String(raw ?? '0');
-      return v.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+      return formatBdt(raw, 2);
+    }
+    function formatAmount(raw, places = 2){
+      const value = Number(raw ?? 0) / 100;
+      if (!Number.isFinite(value)) return '0.00';
+      return value.toLocaleString('en-US', { minimumFractionDigits: places, maximumFractionDigits: places });
     }
     async function jsonFetch(url, options){
       const res = await fetch(url, options);
@@ -398,6 +408,7 @@
         el('latestBlock').textContent = status.latestBlockHeight ?? stats.latestBlockHeight ?? '0';
         el('pendingTxs').textContent = status.pendingTxs ?? status.mempoolPending ?? '0';
         el('nodeHealth').textContent = status.status === 'OK' ? 'Online' : 'Unknown';
+        el('totalSupply').textContent = formatBalance(stats.totalSupply || 0);
         el('healthPill').className = 'pill ' + (status.status === 'OK' ? 'green' : 'amber');
         el('identityMode').textContent = status.privateKeyBacked ? 'Key-backed' : 'Address only';
         currentNodeAddress = status.nodeAddress || 'unknown';
@@ -405,9 +416,9 @@
         el('sideNodeAddress').textContent = shortValue(currentNodeAddress, 13, 8);
         if (currentNodeAddress && currentNodeAddress !== 'unknown') {
           const account = await jsonFetch(endpoints.nodeAccount(currentNodeAddress));
-          el('nodeBalance').textContent = formatBalance(account.balance || 0);
+          el('nodeBalance').textContent = formatAmount(account.balance || 0);
         } else {
-          el('nodeBalance').textContent = '0';
+          el('nodeBalance').textContent = '0.00';
         }
       } catch(error) {
         el('nodeHealth').textContent = 'Offline';
@@ -518,7 +529,7 @@
             <td class="mono">${escapeHtml(shortValue(row.txHash, 14, 8))}</td>
             <td class="mono">${escapeHtml(shortValue(row.sender, 10, 6))}</td>
             <td class="mono">${escapeHtml(shortValue(row.recipient, 10, 6))}</td>
-            <td class="mono">${escapeHtml(row.fee ?? 0)}</td>
+            <td class="mono">${escapeHtml(formatBdt(row.fee ?? 0, 4))}</td>
           </tr>
         `).join('') : '<tr><td colspan="4" class="muted">Mempool is empty.</td></tr>';
       } catch(error) {
@@ -567,7 +578,10 @@
             <td class="mono">${escapeHtml(shortValue(tx.txHash, 14, 8))}</td>
             <td class="mono">${escapeHtml(shortValue(tx.sender, 10, 6))}</td>
             <td class="mono">${escapeHtml(shortValue(tx.recipient, 10, 6))}</td>
-            <td class="mono">${escapeHtml(tx.value ?? 0)}</td>
+            <td class="mono">${escapeHtml(formatBdt(tx.value ?? 0, 2))}</td>
+            <td class="mono">${escapeHtml(formatBdt(tx.totalFee ?? 0, 4))}</td>
+            <td class="mono">${escapeHtml(formatBdt(tx.broadcastFee ?? 0, 4))}</td>
+            <td class="mono">${escapeHtml(formatBdt(tx.consensusFee ?? 0, 4))}</td>
             <td>${escapeHtml(tx.status ?? '-')}</td>
           </tr>
         `).join('');
@@ -577,8 +591,8 @@
             <div class="panel-head"><div><h2>Block Transactions</h2><p>${(block.transactions || []).length} transaction records</p></div></div>
             <div class="table-wrap">
               <table>
-                <thead><tr><th>Hash</th><th>Sender</th><th>Recipient</th><th>Value</th><th>Status</th></tr></thead>
-                <tbody>${txRows || '<tr><td colspan="5" class="muted">No transactions in this block.</td></tr>'}</tbody>
+                <thead><tr><th>Hash</th><th>Sender</th><th>Recipient</th><th>Value</th><th>Total Fee</th><th>Broadcast</th><th>Proposer</th><th>Status</th></tr></thead>
+                <tbody>${txRows || '<tr><td colspan="8" class="muted">No transactions in this block.</td></tr>'}</tbody>
               </table>
             </div>
           </div>

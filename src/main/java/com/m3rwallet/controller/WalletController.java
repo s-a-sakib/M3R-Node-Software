@@ -9,8 +9,11 @@ import com.m3rwallet.entity.Validator.ValidatorStatus;
 import com.m3rwallet.config.ConsensusProperties;
 import com.m3rwallet.repository.BlockRepository;
 import com.m3rwallet.repository.BlockTransactionRepository;
+import com.m3rwallet.repository.EscrowRepository;
+import com.m3rwallet.repository.TxLedgerRepository;
 import com.m3rwallet.repository.ValidatorRepository;
 import com.m3rwallet.repository.AccountRepository;
+import com.m3rwallet.repository.TransactionRepository;
 import com.m3rwallet.service.BlockBroadcastService;
 import com.m3rwallet.service.FeeDistributionService;
 import com.m3rwallet.service.MempoolService;
@@ -19,6 +22,7 @@ import com.m3rwallet.service.NodeConsensusService;
 import com.m3rwallet.service.TxLedgerService;
 import com.m3rwallet.service.ValidatorService;
 import com.m3rwallet.service.WalletService;
+import com.m3rwallet.util.AddressUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -55,10 +59,19 @@ public class WalletController {
     private BlockTransactionRepository blockTxRepo;
 
     @Autowired
+    private TxLedgerRepository txLedgerRepository;
+
+    @Autowired
     private ValidatorRepository validatorRepo;
 
     @Autowired
     private AccountRepository accountRepository;
+
+    @Autowired
+    private TransactionRepository transactionRepository;
+
+    @Autowired
+    private EscrowRepository escrowRepository;
 
     @Autowired(required = false)
     private ValidatorService validatorService;
@@ -236,7 +249,11 @@ public class WalletController {
         }
 
         try {
-            String txHash = walletService.executeTransaction(network, request.getRawTxHex(), request.getPubKeyCompressedHex());
+            String txHash = walletService.executeTransaction(
+                    network,
+                    request.getRawTxHex(),
+                    request.getPubKeyCompressedHex(),
+                    request.getBroadcasterAddress());
             return ResponseEntity.ok(TxResponse.builder()
                     .status("ACCEPTED")
                     .txHash(txHash)
@@ -402,8 +419,16 @@ public class WalletController {
             );
         }
 
-        // Normalise: strip optional 0x prefix and lower-case
-        String normalizedAddr = addr.startsWith("0x") ? addr.substring(2).toLowerCase() : addr.toLowerCase();
+        String normalizedAddr = AddressUtil.resolveToHex20(addr);
+        if (normalizedAddr == null || normalizedAddr.isBlank()) {
+            return ResponseEntity.badRequest().body(
+                    TxHistoryResponse.builder()
+                            .status("ERROR")
+                            .message("Invalid addr parameter")
+                            .entries(java.util.Collections.emptyList())
+                            .build()
+            );
+        }
 
         try {
             List<TxLedger> entries = txLedgerService.getLedger(network, normalizedAddr);
@@ -414,8 +439,8 @@ public class WalletController {
                             .type(e.getType())
                             .amount(e.getAmount())
                             .fee(e.getFee())
-                            .fromAddr(e.getFromAddr())
-                            .toAddr(e.getToAddr())
+                            .fromAddr(AddressUtil.toDisplayAddress(e.getFromAddr()))
+                            .toAddr(AddressUtil.toDisplayAddress(e.getToAddr()))
                             .escrowId(e.getEscrowId())
                             .status(e.getStatus())
                             .createdAt(e.getCreatedAt())
@@ -501,7 +526,7 @@ public class WalletController {
             List<Map<String, Object>> result = accounts.stream().map(a -> {
                 Map<String, Object> m = new LinkedHashMap<>();
                 m.put("id", a.getId());
-                m.put("address", a.getAddress());
+                m.put("address", AddressUtil.toDisplayAddress(a.getAddress()));
                 m.put("balance", a.getBalance());
                 m.put("nonce", a.getNonce());
                 m.put("network", a.getNetwork());
@@ -513,6 +538,40 @@ public class WalletController {
                     "totalPages", accounts.getTotalPages(),
                     "currentPage", page,
                     "size", size
+            ));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @GetMapping("/{network}/transactions")
+    @ResponseBody
+    public ResponseEntity<?> getTransactions(
+            @PathVariable String network,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        try {
+            int safePage = Math.max(0, page);
+            int safeSize = Math.max(1, Math.min(size, 100));
+            int offset = safePage * safeSize;
+            List<Map<String, Object>> all = transactionRepository.findByNetwork(network).stream()
+                    .map(tx -> {
+                        Map<String, Object> m = new LinkedHashMap<>();
+                        m.put("hash", tx.getHash());
+                        m.put("status", tx.getStatus());
+                        m.put("createdAt", tx.getCreatedAt());
+                        m.put("network", tx.getNetwork());
+                        return m;
+                    })
+                    .collect(Collectors.toList());
+            List<Map<String, Object>> pageContent = offset >= all.size()
+                    ? List.of()
+                    : all.subList(offset, Math.min(offset + safeSize, all.size()));
+            return ResponseEntity.ok(Map.of(
+                    "content", pageContent,
+                    "totalElements", all.size(),
+                    "currentPage", safePage,
+                    "size", safeSize
             ));
         } catch (Exception e) {
             return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
@@ -535,13 +594,15 @@ public class WalletController {
                             .map(tx -> {
                                 Map<String, Object> t = new LinkedHashMap<>();
                                 t.put("txHash",          tx.getTxHash());
-                                t.put("sender",          tx.getSenderAddress());
-                                t.put("recipient",       tx.getRecipientAddress());
+                                t.put("sender",          AddressUtil.toDisplayAddress(tx.getSenderAddress()));
+                                t.put("recipient",       AddressUtil.toDisplayAddress(tx.getRecipientAddress()));
                                 t.put("value",           tx.getValue());
                                 t.put("totalFee",        tx.getTotalFee());
                                 t.put("broadcastFee",    tx.getBroadcastFee());
                                 t.put("consensusFee",    tx.getConsensusFee());
+                                t.put("broadcasterAddress", AddressUtil.toDisplayAddress(tx.getBroadcasterAddress()));
                                 t.put("status",          tx.getStatus());
+                                enrichBlockTransactionFromLedger(network, tx.getTxHash(), t);
                                 return t;
                             })
                             .collect(Collectors.toList());
@@ -564,6 +625,61 @@ public class WalletController {
         } catch (Exception e) {
             return ResponseEntity.internalServerError()
                     .body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    private void enrichBlockTransactionFromLedger(String network, String txHash, Map<String, Object> txView) {
+        if (txHash == null || txHash.isBlank()) {
+            return;
+        }
+        boolean missingCoreDetails = txView.get("sender") == null
+                || txView.get("recipient") == null
+                || txView.get("value") == null
+                || txView.get("totalFee") == null;
+        if (!missingCoreDetails) {
+            return;
+        }
+        try {
+            List<TxLedger> ledgerEntries = txLedgerRepository.findByNetworkAndTxHash(network, txHash);
+            if (ledgerEntries == null || ledgerEntries.isEmpty()) {
+                return;
+            }
+            Optional<TxLedger> primary = ledgerEntries.stream()
+                    .filter(l -> l.getType() != null && (
+                            l.getType().equals("SEND")
+                                    || l.getType().equals("ESCROW_CREATE")
+                                    || l.getType().equals("ESCROW_RELEASE")
+                                    || l.getType().equals("ESCROW_REFUND")))
+                    .findFirst();
+            TxLedger ledger = primary.orElse(ledgerEntries.get(0));
+            txView.putIfAbsent("sender", AddressUtil.toDisplayAddress(ledger.getFromAddr()));
+            txView.putIfAbsent("recipient", AddressUtil.toDisplayAddress(ledger.getToAddr()));
+            txView.putIfAbsent("value", parseBigDecimalOrNull(ledger.getAmount()));
+            Long totalFee = parseLongOrNull(ledger.getFee());
+            txView.putIfAbsent("totalFee", totalFee);
+            if (totalFee != null && feeDistributionService != null) {
+                var fees = feeDistributionService.splitTotalFee(totalFee);
+                txView.putIfAbsent("broadcastFee", fees.broadcastFee());
+                txView.putIfAbsent("consensusFee", fees.consensusFee());
+            }
+        } catch (Exception e) {
+            log.debug("Could not enrich block tx {} from ledger: {}", txHash, e.getMessage());
+        }
+    }
+
+    private BigDecimal parseBigDecimalOrNull(String value) {
+        try {
+            return value == null ? null : new BigDecimal(value);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private Long parseLongOrNull(String value) {
+        try {
+            return value == null ? null : Long.parseLong(value);
+        } catch (Exception e) {
+            return null;
         }
     }
 
@@ -761,6 +877,36 @@ public class WalletController {
         }
     }
 
+    @GetMapping("/{network}/validators")
+    @ResponseBody
+    public ResponseEntity<?> getPublicValidators(@PathVariable String network) {
+        try {
+            List<Map<String, Object>> validators = validatorRepo
+                    .findByNetworkAndStatus(network, ValidatorStatus.ACTIVE)
+                    .stream()
+                    .map(v -> {
+                        Map<String, Object> m = new LinkedHashMap<>();
+                        m.put("address", AddressUtil.toDisplayAddress(v.getAddress()));
+                        m.put("stakedAmount", v.getStakedAmount());
+                        m.put("status", v.getStatus());
+                        m.put("weight", validatorService != null ? validatorService.calculateWeight(v) : 0.0d);
+                        m.put("successfulProposals", v.getSuccessfulProposals());
+                        m.put("totalProposals", v.getTotalProposals());
+                        return m;
+                    })
+                    .collect(Collectors.toList());
+
+            return ResponseEntity.ok(Map.of(
+                    "network", network,
+                    "validators", validators,
+                    "total", validators.size()
+            ));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError()
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
     @GetMapping("/{network}/mempool")
     @ResponseBody
     public ResponseEntity<?> getMempoolStatus(
@@ -777,8 +923,9 @@ public class WalletController {
                             .map(tx -> {
                                 Map<String, Object> m = new LinkedHashMap<>();
                                 m.put("txHash",     tx.txHash());
-                                m.put("sender",     tx.senderAddress());
-                                m.put("recipient",  tx.recipientAddress());
+                                m.put("sender",     AddressUtil.toDisplayAddress(tx.senderAddress()));
+                                m.put("recipient",  AddressUtil.toDisplayAddress(tx.recipientAddress()));
+                                m.put("broadcasterAddress", AddressUtil.toDisplayAddress(tx.broadcasterAddress()));
                                 m.put("fee",        tx.fee());
                                 m.put("receivedAt", tx.receivedAt());
                                 return m;
@@ -812,7 +959,8 @@ public class WalletController {
                     "network",         network,
                     "finalizedBlocks", totalBlocks,
                     "activeValidators",totalValidators,
-                    "pendingTxs",      mempoolSize
+                    "pendingTxs",      mempoolSize,
+                    "totalSupply",     calculateTotalSupply(network).toPlainString()
             ));
         } catch (Exception e) {
             return ResponseEntity.internalServerError()
@@ -846,6 +994,32 @@ public class WalletController {
     }
 
     // Helper
+    private BigDecimal calculateTotalSupply(String network) {
+        BigDecimal accountBalances = accountRepository.findByNetwork(network).stream()
+                .map(a -> parseBigDecimalOrZero(a.getBalance()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal lockedValidatorStake = validatorRepo.findByNetwork(network).stream()
+                .map(v -> v.getStakedAmount() == null ? BigDecimal.ZERO : v.getStakedAmount())
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal lockedEscrows = escrowRepository.findByNetwork(network).stream()
+                .map(e -> parseBigDecimalOrZero(e.getAmount()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal pendingFeeReserve = BigDecimal.ZERO;
+        if (mempoolService != null) {
+            pendingFeeReserve = BigDecimal.valueOf(mempoolService.pendingFeeTotal(network,
+                    txHash -> blockTxRepo.findByTxHash(txHash) != null));
+        }
+        return accountBalances.add(lockedValidatorStake).add(lockedEscrows).add(pendingFeeReserve);
+    }
+
+    private BigDecimal parseBigDecimalOrZero(String value) {
+        try {
+            return value == null ? BigDecimal.ZERO : new BigDecimal(value);
+        } catch (Exception e) {
+            return BigDecimal.ZERO;
+        }
+    }
+
     private Long getLong(Map<String, Object> m, String key) {
         try {
             Object v = m.get(key);

@@ -6,6 +6,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Isolation;
 
 import java.math.BigInteger;
 import java.util.Optional;
@@ -41,9 +42,29 @@ public class AccountService {
     /**
      * Get account for update (for transaction locking)
      */
+    @Transactional(isolation = Isolation.SERIALIZABLE)
     public Account getAccountForUpdate(String network, String address) {
         Optional<Account> acc = accountRepository.findForUpdate(network, address);
         return acc.orElse(null);
+    }
+
+    /**
+     * Update and save an already-locked Account instance in-place.
+     * This avoids re-querying which would release a pessimistic lock.
+     */
+    @Transactional
+    public void updateAccountInPlace(Account lockedAccount, String network, String address, BigInteger newBalance, long newNonce) {
+        if (lockedAccount == null) {
+            // create new account if none provided
+            lockedAccount = new Account();
+            lockedAccount.setNetwork(network);
+            lockedAccount.setAddress(address);
+        }
+        lockedAccount.setNetwork(network);
+        lockedAccount.setAddress(address);
+        lockedAccount.setBalance(newBalance.toString());
+        lockedAccount.setNonce(newNonce);
+        accountRepository.save(lockedAccount);
     }
 
     /**

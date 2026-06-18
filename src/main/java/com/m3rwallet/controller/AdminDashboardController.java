@@ -6,9 +6,11 @@ import com.m3rwallet.entity.Escrow;
 import com.m3rwallet.entity.Transaction;
 import com.m3rwallet.entity.Validator;
 import com.m3rwallet.repository.BlockRepository;
+import com.m3rwallet.repository.BlockTransactionRepository;
 import com.m3rwallet.repository.ValidatorRepository;
 import com.m3rwallet.service.AccountService;
 import com.m3rwallet.service.EscrowService;
+import com.m3rwallet.service.MempoolService;
 import com.m3rwallet.service.TransactionService;
 import com.m3rwallet.service.ValidatorService;
 import com.m3rwallet.util.AddressUtil;
@@ -21,6 +23,7 @@ import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.*;
+import java.math.BigDecimal;
 import java.util.stream.Collectors;
 
 @Controller
@@ -35,8 +38,10 @@ public class AdminDashboardController {
     private final AdminViewUtil adminViewUtil;
 
     private final BlockRepository blockRepo;
+    private final BlockTransactionRepository blockTxRepo;
     private final ValidatorRepository validatorRepo;
     private final ValidatorService validatorService;
+    private final MempoolService mempoolService;
 
     @GetMapping("")
     public String dashboard(Model model) {
@@ -138,6 +143,7 @@ public class AdminDashboardController {
             long totalBlocks = blockRepo.count();
             long finalizedBlocks = blockRepo.countByNetworkAndIsFinalized("mainnet", true);
             long activeValidators = validatorRepo.findByStatus(Validator.ValidatorStatus.ACTIVE).size();
+            BigDecimal totalSupply = calculateTotalSupply("mainnet");
 
             Optional<Block> latest = blockRepo.findTopByNetworkOrderByBlockHeightDesc("mainnet");
 
@@ -148,6 +154,7 @@ public class AdminDashboardController {
             stats.put("latestBlockHeight", latest.map(Block::getBlockHeight).orElse(0L));
             stats.put("latestBlockHash", latest.map(Block::getBlockHash).orElse("none"));
             stats.put("latestBlockTime", latest.map(Block::getTimestamp).orElse(0L));
+            stats.put("totalSupply", totalSupply.toPlainString());
 
             return ResponseEntity.ok(stats);
         } catch (Exception e) {
@@ -194,7 +201,7 @@ public class AdminDashboardController {
                     .map(account -> {
                         Map<String, Object> m = new LinkedHashMap<>();
                         m.put("network", account.getNetwork());
-                        m.put("address", account.getAddress());
+                        m.put("address", adminViewUtil.address(account.getAddress()));
                         m.put("displayAddress", adminViewUtil.address(account.getAddress()));
                         m.put("balance", account.getBalance());
                         m.put("displayBalance", adminViewUtil.amount(account.getBalance()));
@@ -249,11 +256,11 @@ public class AdminDashboardController {
                         Map<String, Object> m = new LinkedHashMap<>();
                         m.put("network", escrow.getNetwork());
                         m.put("escrowId", escrow.getEscrowId());
-                        m.put("buyer", escrow.getBuyer());
+                        m.put("buyer", adminViewUtil.address(escrow.getBuyer()));
                         m.put("buyerDisplay", adminViewUtil.address(escrow.getBuyer()));
-                        m.put("seller", escrow.getSeller());
+                        m.put("seller", adminViewUtil.address(escrow.getSeller()));
                         m.put("sellerDisplay", adminViewUtil.address(escrow.getSeller()));
-                        m.put("arbiter", escrow.getArbiter());
+                        m.put("arbiter", adminViewUtil.address(escrow.getArbiter()));
                         m.put("arbiterDisplay", adminViewUtil.address(escrow.getArbiter()));
                         m.put("amount", escrow.getAmount());
                         m.put("displayAmount", adminViewUtil.amount(escrow.getAmount()));
@@ -268,6 +275,32 @@ public class AdminDashboardController {
     }
 
     // --- helpers ---
+    private BigDecimal calculateTotalSupply(String network) {
+        BigDecimal accountBalances = accountService.getAccountsByNetwork(network).stream()
+                .map(account -> parseBigDecimalOrZero(account.getBalance()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal lockedValidatorStake = validatorRepo.findByNetwork(network).stream()
+                .map(v -> v.getStakedAmount() == null ? BigDecimal.ZERO : v.getStakedAmount())
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal lockedEscrows = escrowService.getEscrowsByNetwork(network).stream()
+                .map(escrow -> parseBigDecimalOrZero(escrow.getAmount()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal pendingFeeReserve = BigDecimal.ZERO;
+        if (mempoolService != null) {
+            pendingFeeReserve = BigDecimal.valueOf(mempoolService.pendingFeeTotal(network,
+                    txHash -> blockTxRepo.findByTxHash(txHash) != null));
+        }
+        return accountBalances.add(lockedValidatorStake).add(lockedEscrows).add(pendingFeeReserve);
+    }
+
+    private BigDecimal parseBigDecimalOrZero(String value) {
+        try {
+            return value == null ? BigDecimal.ZERO : new BigDecimal(value);
+        } catch (Exception e) {
+            return BigDecimal.ZERO;
+        }
+    }
+
     private boolean matchesAccount(Account account, String query) {
         return adminViewUtil.contains(account.getAddress(), query)
                 || adminViewUtil.contains(adminViewUtil.address(account.getAddress()), query)

@@ -21,7 +21,7 @@ public class DashboardController {
     @GetMapping("/")
     public String home(Model model) {
         model.addAttribute("stats", stats());
-        return "admin/dashboard";
+        return "public/index";
     }
 
     private Map<String, Object> stats() {
