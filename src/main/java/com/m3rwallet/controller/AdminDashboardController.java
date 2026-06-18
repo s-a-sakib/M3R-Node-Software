@@ -6,9 +6,11 @@ import com.m3rwallet.entity.Escrow;
 import com.m3rwallet.entity.Transaction;
 import com.m3rwallet.entity.Validator;
 import com.m3rwallet.repository.BlockRepository;
+import com.m3rwallet.repository.BlockTransactionRepository;
 import com.m3rwallet.repository.ValidatorRepository;
 import com.m3rwallet.service.AccountService;
 import com.m3rwallet.service.EscrowService;
+import com.m3rwallet.service.MempoolService;
 import com.m3rwallet.service.TransactionService;
 import com.m3rwallet.service.ValidatorService;
 import com.m3rwallet.util.AddressUtil;
@@ -36,8 +38,10 @@ public class AdminDashboardController {
     private final AdminViewUtil adminViewUtil;
 
     private final BlockRepository blockRepo;
+    private final BlockTransactionRepository blockTxRepo;
     private final ValidatorRepository validatorRepo;
     private final ValidatorService validatorService;
+    private final MempoolService mempoolService;
 
     @GetMapping("")
     public String dashboard(Model model) {
@@ -281,7 +285,12 @@ public class AdminDashboardController {
         BigDecimal lockedEscrows = escrowService.getEscrowsByNetwork(network).stream()
                 .map(escrow -> parseBigDecimalOrZero(escrow.getAmount()))
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
-        return accountBalances.add(lockedValidatorStake).add(lockedEscrows);
+        BigDecimal pendingFeeReserve = BigDecimal.ZERO;
+        if (mempoolService != null) {
+            pendingFeeReserve = BigDecimal.valueOf(mempoolService.pendingFeeTotal(network,
+                    txHash -> blockTxRepo.findByTxHash(txHash) != null));
+        }
+        return accountBalances.add(lockedValidatorStake).add(lockedEscrows).add(pendingFeeReserve);
     }
 
     private BigDecimal parseBigDecimalOrZero(String value) {

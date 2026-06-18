@@ -369,6 +369,11 @@
     function formatBalance(raw){
       return formatBdt(raw, 2);
     }
+    function formatAmount(raw, places = 2){
+      const value = Number(raw ?? 0) / 100;
+      if (!Number.isFinite(value)) return '0.00';
+      return value.toLocaleString('en-US', { minimumFractionDigits: places, maximumFractionDigits: places });
+    }
     async function jsonFetch(url, options){
       const res = await fetch(url, options);
       const text = await res.text();
@@ -411,9 +416,9 @@
         el('sideNodeAddress').textContent = shortValue(currentNodeAddress, 13, 8);
         if (currentNodeAddress && currentNodeAddress !== 'unknown') {
           const account = await jsonFetch(endpoints.nodeAccount(currentNodeAddress));
-          el('nodeBalance').textContent = formatBalance(account.balance || 0);
+          el('nodeBalance').textContent = formatAmount(account.balance || 0);
         } else {
-          el('nodeBalance').textContent = '0';
+          el('nodeBalance').textContent = '0.00';
         }
       } catch(error) {
         el('nodeHealth').textContent = 'Offline';

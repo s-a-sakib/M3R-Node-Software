@@ -70,18 +70,13 @@ public class BlockBroadcastService {
                     ? consensusProperties.getPeers()
                     : List.of();
             if (configuredPeers != null && !configuredPeers.isEmpty()) {
-                peerUrls = configuredPeers.stream()
-                        .filter(Objects::nonNull)
-                        .map(String::trim)
-                        .filter(s -> !s.isBlank())
-                        .map(this::stripTrailingSlash)
-                        .distinct()
-                        .collect(Collectors.toList());
+                peerUrls = com.m3rwallet.util.PeerUrlUtil.remotePeers(configuredPeers, getSelfUrl());
             } else {
                 peerUrls = Arrays.stream((peersConfig == null ? "" : peersConfig).split(","))
                         .map(String::trim)
                         .filter(s -> !s.isBlank())
                         .map(this::stripTrailingSlash)
+                        .filter(peer -> !com.m3rwallet.util.PeerUrlUtil.isSameOrigin(peer, getSelfUrl()))
                         .distinct()
                         .collect(Collectors.toList());
             }

@@ -3,6 +3,7 @@ package com.m3rwallet.service;
 import com.m3rwallet.config.ConsensusProperties;
 import com.m3rwallet.entity.Account;
 import com.m3rwallet.repository.AccountRepository;
+import com.m3rwallet.util.PeerUrlUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -13,6 +14,8 @@ import org.springframework.web.client.RestTemplate;
 
 import java.math.BigInteger;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -30,13 +33,19 @@ public class AccountReconciliationService {
     @Value("${app.blockchain.network:mainnet}")
     private String defaultNetwork;
 
+    @Value("${app.node.self-url:}")
+    private String selfUrl;
+
+    @Value("${app.reconciliation.apply-peer-snapshots:false}")
+    private boolean applyPeerSnapshots;
+
     @Scheduled(fixedRate = 10000)
     public void reconcileAccounts() {
         if (consensusProperties == null || !consensusProperties.isEnabled()) return;
 
         String network = defaultNetwork;
-        List<String> peers = consensusProperties.getPeers();
-        if (peers == null || peers.isEmpty()) return;
+        List<String> peers = remotePeers();
+        if (peers.isEmpty()) return;
 
         List<Account> localAccounts = accountRepository.findByNetwork(network);
         for (Account acc : localAccounts) {
@@ -57,16 +66,9 @@ public class AccountReconciliationService {
                 .ifPresent(account -> snapshots.add(new AccountSnapshot(
                         account.getBalance(), account.getNonce() == null ? 0L : account.getNonce())));
 
-        List<String> peers = consensusProperties.getPeers();
-        if (peers == null) {
-            peers = List.of();
-        }
-
-        for (String peer : peers) {
+        for (String peer : remotePeers()) {
             try {
-                String path = peer;
-                if (!path.endsWith("/")) path += "/";
-                String url = path + network + "/account?addr=" + address;
+                String url = PeerUrlUtil.normalize(peer) + "/" + network + "/account?addr=" + address;
                 Map response = restTemplate.getForObject(url, Map.class);
                 AccountSnapshot snapshot = snapshotFromResponse(response);
                 if (snapshot != null) {
@@ -77,8 +79,47 @@ public class AccountReconciliationService {
             }
         }
 
-        chooseAuthoritativeSnapshot(snapshots).ifPresent(snapshot ->
-                reconcileSingleAccount(network, address, snapshot.balance(), snapshot.nonce()));
+        chooseAuthoritativeSnapshot(snapshots).ifPresent(snapshot -> {
+            if (!applyPeerSnapshots) {
+                return;
+            }
+            Optional<Account> localOpt = accountRepository.findByNetworkAndAddress(network, address);
+            long localNonce = localOpt.map(Account::getNonce).orElse(0L);
+            if (localNonce > snapshot.nonce()) {
+                log.debug("[RECONCILE] Skipping {} — local nonce {} ahead of authoritative {}",
+                        address, localNonce, snapshot.nonce());
+                return;
+            }
+            if (localNonce == snapshot.nonce()) {
+                String localBalance = localOpt.map(Account::getBalance).orElse("0");
+                if (localBalance.equals(snapshot.balance())) {
+                    return;
+                }
+                BigInteger localBal = new BigInteger(localBalance);
+                BigInteger chosenBal = new BigInteger(snapshot.balance());
+                if (chosenBal.compareTo(localBal) < 0) {
+                    log.debug("[RECONCILE] Skipping {} at nonce {} — refusing same-nonce balance downgrade {} -> {}",
+                            address, snapshot.nonce(), localBalance, snapshot.balance());
+                    return;
+                }
+                long agreeingNodes = snapshots.stream()
+                        .filter(entry -> entry.nonce() == snapshot.nonce())
+                        .filter(entry -> entry.balance().equals(snapshot.balance()))
+                        .count();
+                if (agreeingNodes < 2) {
+                    log.debug("[RECONCILE] Skipping {} at nonce {} — no peer majority for balance {}",
+                            address, snapshot.nonce(), snapshot.balance());
+                    return;
+                }
+            }
+            reconcileSingleAccount(network, address, snapshot.balance(), snapshot.nonce());
+        });
+    }
+
+    private List<String> remotePeers() {
+        return PeerUrlUtil.remotePeers(
+                consensusProperties == null ? List.of() : consensusProperties.getPeers(),
+                selfUrl);
     }
 
     private AccountSnapshot snapshotFromResponse(Map response) {
@@ -99,6 +140,11 @@ public class AccountReconciliationService {
         return new AccountSnapshot(balance, nonce);
     }
 
+    /**
+     * Pick the state at the highest observed nonce, then choose the balance value
+     * with the most votes among nodes at that nonce. This avoids inflating balances
+     * by taking the maximum when nodes temporarily diverge.
+     */
     private Optional<AccountSnapshot> chooseAuthoritativeSnapshot(List<AccountSnapshot> snapshots) {
         if (snapshots.isEmpty()) {
             return Optional.empty();
@@ -109,19 +155,24 @@ public class AccountReconciliationService {
                 .max()
                 .orElse(0L);
 
-        BigInteger chosenBalance = null;
-        for (AccountSnapshot snapshot : snapshots) {
-            if (snapshot.nonce() == highestNonce) {
-                BigInteger balance = new BigInteger(snapshot.balance());
-                if (chosenBalance == null || balance.compareTo(chosenBalance) > 0) {
-                    chosenBalance = balance;
-                }
-            }
+        List<AccountSnapshot> atHighestNonce = snapshots.stream()
+                .filter(snapshot -> snapshot.nonce() == highestNonce)
+                .toList();
+        if (atHighestNonce.isEmpty()) {
+            return Optional.empty();
         }
 
-        return chosenBalance == null
-                ? Optional.empty()
-                : Optional.of(new AccountSnapshot(chosenBalance.toString(), highestNonce));
+        Map<String, Integer> votes = new HashMap<>();
+        for (AccountSnapshot snapshot : atHighestNonce) {
+            votes.merge(snapshot.balance(), 1, Integer::sum);
+        }
+
+        int requiredVotes = (atHighestNonce.size() + 1) / 2;
+        return votes.entrySet().stream()
+                .filter(entry -> entry.getValue() >= requiredVotes)
+                .max(Comparator.<Map.Entry<String, Integer>>comparingInt(Map.Entry::getValue)
+                        .thenComparing(entry -> new BigInteger(entry.getKey())))
+                .map(entry -> new AccountSnapshot(entry.getKey(), highestNonce));
     }
 
     private void reconcileSingleAccount(String network, String address, String authoritativeBalance, long authoritativeNonce) {
@@ -148,6 +199,10 @@ public class AccountReconciliationService {
             BigInteger localBal = new BigInteger(local.getBalance());
             BigInteger chosenBal = new BigInteger(authoritativeBalance == null ? "0" : authoritativeBalance);
             long localNonce = local.getNonce() == null ? 0L : local.getNonce();
+
+            if (localNonce > authoritativeNonce) {
+                return;
+            }
 
             if (!localBal.equals(chosenBal) || localNonce != authoritativeNonce) {
                 local.setBalance(chosenBal.toString());

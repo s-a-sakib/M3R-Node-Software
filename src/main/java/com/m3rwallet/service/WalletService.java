@@ -18,12 +18,16 @@ import org.springframework.transaction.annotation.Isolation;
 import java.math.BigInteger;
 import java.security.MessageDigest;
 import java.util.Arrays;
+import java.util.Objects;
 
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class WalletService {
     public record VerifiedTxInfo(String senderAddress, BigInteger nonce) {}
+
+    private static final int TX_HASH_LOCK_STRIPES = 4096;
+    private final Object[] txHashLocks = createTxHashLocks();
 
     private final AccountService accountService;
     private final TransactionService transactionService;
@@ -71,12 +75,17 @@ public class WalletService {
 
     public Account getAccountInfo(String network, String addr) {
         String normalizedAddr = AddressUtil.resolveToHex20(addr);
-        if (normalizedAddr == null || normalizedAddr.isEmpty()) {
+        String rawAddr = addr == null ? null : addr.trim();
+        if ((normalizedAddr == null || normalizedAddr.isEmpty()) && (rawAddr == null || rawAddr.isEmpty())) {
             return null;
         }
 
-        Account account = accountService.getAccount(network, normalizedAddr);
-        log.info("[ACCOUNT][{}] {} => balance={} nonce={}", network, normalizedAddr,
+        Account account = normalizedAddr == null ? null : accountService.getAccount(network, normalizedAddr);
+        if (account == null && rawAddr != null && !rawAddr.equalsIgnoreCase(normalizedAddr)) {
+            account = accountService.getAccount(network, rawAddr);
+        }
+        String loggedAddress = account != null ? account.getAddress() : (normalizedAddr != null ? normalizedAddr : rawAddr);
+        log.info("[ACCOUNT][{}] {} => balance={} nonce={}", network, loggedAddress,
                 account != null ? account.getBalance() : "0",
                 account != null ? account.getNonce() : "0");
         return account;
@@ -144,7 +153,13 @@ public class WalletService {
     public String executeTransaction(String network, String rawTxHex, String pubKeyCompressedHex, String broadcasterAddress) {
         TxDecoder.ParsedTx tx = parseAndVerifyTransaction(rawTxHex, pubKeyCompressedHex);
         String txHash = computeTxHash(rawTxHex);
+        synchronized (lockForTxHash(network, txHash)) {
+            return executeTransactionLocked(network, rawTxHex, pubKeyCompressedHex, broadcasterAddress, tx, txHash);
+        }
+    }
 
+    private String executeTransactionLocked(String network, String rawTxHex, String pubKeyCompressedHex,
+                                            String broadcasterAddress, TxDecoder.ParsedTx tx, String txHash) {
         // ---- Replay protection (global by hash) ----
         try {
             if (transactionRepository != null && transactionRepository.existsByHash(txHash)) {
@@ -225,6 +240,7 @@ public class WalletService {
                                 totalFee,             // long fee
                                 broadcastFee,         // long broadcastFee
                                 consensusFee,         // long consensusFee
+                                nonceFromUser.longValueExact(), // long nonce
                                 broadcaster,          // String broadcasterAddress
                                 network,              // String network
                                 System.currentTimeMillis(), // long receivedAt
@@ -590,5 +606,18 @@ public class WalletService {
     public String getTxStatus(String network, String txHash) {
         Transaction tx = transactionService.getTx(network, txHash);
         return tx != null ? tx.getStatus() : "UNKNOWN";
+    }
+
+    private Object lockForTxHash(String network, String txHash) {
+        int index = Math.floorMod(Objects.hash(network, txHash), txHashLocks.length);
+        return txHashLocks[index];
+    }
+
+    private static Object[] createTxHashLocks() {
+        Object[] locks = new Object[TX_HASH_LOCK_STRIPES];
+        for (int i = 0; i < locks.length; i++) {
+            locks[i] = new Object();
+        }
+        return locks;
     }
 }

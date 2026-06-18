@@ -1004,7 +1004,12 @@ public class WalletController {
         BigDecimal lockedEscrows = escrowRepository.findByNetwork(network).stream()
                 .map(e -> parseBigDecimalOrZero(e.getAmount()))
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
-        return accountBalances.add(lockedValidatorStake).add(lockedEscrows);
+        BigDecimal pendingFeeReserve = BigDecimal.ZERO;
+        if (mempoolService != null) {
+            pendingFeeReserve = BigDecimal.valueOf(mempoolService.pendingFeeTotal(network,
+                    txHash -> blockTxRepo.findByTxHash(txHash) != null));
+        }
+        return accountBalances.add(lockedValidatorStake).add(lockedEscrows).add(pendingFeeReserve);
     }
 
     private BigDecimal parseBigDecimalOrZero(String value) {

@@ -5,6 +5,8 @@ import com.m3rwallet.dto.TxResponse;
 import com.m3rwallet.dto.TxSubmitRequest;
 import com.m3rwallet.entity.Validator;
 import com.m3rwallet.repository.ValidatorRepository;
+import com.m3rwallet.util.PeerUrlUtil;
+import com.m3rwallet.util.TxDecoder;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -51,6 +53,9 @@ public class NodeConsensusService {
     @Value("${app.blockchain.network:mainnet}")
     private String defaultNetwork;
 
+    @Value("${app.node.self-url:}")
+    private String selfUrl;
+
     public boolean isEnabled() {
         return consensusProperties.isEnabled() && !normalizedPeers().isEmpty();
     }
@@ -76,33 +81,34 @@ public class NodeConsensusService {
 
         String senderAddress = txInfo.senderAddress();
         synchronized (lockForSender(network, senderAddress)) {
-            BigInteger expectedNonce = BigInteger.valueOf(walletService.getCurrentNonce(network, senderAddress)).add(BigInteger.ONE);
-            if (txInfo.nonce().compareTo(expectedNonce) <= 0) {
-                return submitWithConsensusLocked(network, request);
-            }
-        }
-
-        long deadline = System.currentTimeMillis() + futureNonceWaitMs;
-        while (System.currentTimeMillis() < deadline) {
-            sleepBeforeNonceRetry();
-            synchronized (lockForSender(network, senderAddress)) {
-                BigInteger expectedNonce = BigInteger.valueOf(walletService.getCurrentNonce(network, senderAddress)).add(BigInteger.ONE);
-                if (txInfo.nonce().compareTo(expectedNonce) <= 0) {
-                    return submitWithConsensusLocked(network, request);
+            long deadline = System.currentTimeMillis() + futureNonceWaitMs;
+            while (true) {
+                long ledgerNonce = walletService.getCurrentNonce(network, senderAddress);
+                BigInteger expectedNonce = BigInteger.valueOf(ledgerNonce).add(BigInteger.ONE);
+                if (txInfo.nonce().equals(expectedNonce)) {
+                    return submitWithConsensusLocked(network, request, txInfo);
                 }
+                if (txInfo.nonce().compareTo(expectedNonce) < 0) {
+                    return TxResponse.builder()
+                            .status("REJECTED")
+                            .message("Invalid nonce (tx=" + txInfo.nonce() + ", expected=" + expectedNonce
+                                    + ", ledger=" + ledgerNonce + ")")
+                            .build();
+                }
+                if (System.currentTimeMillis() >= deadline) {
+                    return TxResponse.builder()
+                            .status("REJECTED")
+                            .message("Invalid nonce (tx=" + txInfo.nonce() + ", expected=" + expectedNonce
+                                    + ", ledger=" + ledgerNonce + ")")
+                            .build();
+                }
+                sleepBeforeNonceRetry();
             }
         }
-
-        long ledgerNonce = walletService.getCurrentNonce(network, senderAddress);
-        BigInteger expectedNonce = BigInteger.valueOf(ledgerNonce).add(BigInteger.ONE);
-        return TxResponse.builder()
-                .status("REJECTED")
-                .message("Invalid nonce (tx=" + txInfo.nonce() + ", expected=" + expectedNonce
-                        + ", ledger=" + ledgerNonce + ")")
-                .build();
     }
 
-    private TxResponse submitWithConsensusLocked(String network, TxSubmitRequest request) {
+    private TxResponse submitWithConsensusLocked(String network, TxSubmitRequest request,
+                                                 WalletService.VerifiedTxInfo txInfo) {
         List<String> peers = normalizedPeers();
         int totalNodes = peers.size() + 1;
         int quorum = quorum(totalNodes);
@@ -196,9 +202,8 @@ public class NodeConsensusService {
         try { broadcastFinalState(network, executedHash); } catch (Exception ignored) {}
         try {
             if (accountReconciliationService != null) {
-                WalletService.VerifiedTxInfo txInfo = walletService.getVerifiedTransactionInfo(
-                        request.getRawTxHex(), request.getPubKeyCompressedHex());
                 accountReconciliationService.reconcileAccount(network, txInfo.senderAddress());
+                reconcileTransactionCounterparties(network, request.getRawTxHex(), txInfo.senderAddress());
             }
         } catch (Exception e) {
             log.debug("[CONSENSUS][{}] Post-execute reconciliation skipped: {}", network, e.getMessage());
@@ -236,12 +241,37 @@ public class NodeConsensusService {
     }
 
     private List<String> normalizedPeers() {
-        return consensusProperties.getPeers().stream()
-                .filter(peer -> peer != null && !peer.isBlank())
-                .map(String::trim)
-                .map(peer -> peer.endsWith("/") ? peer.substring(0, peer.length() - 1) : peer)
-                .distinct()
-                .toList();
+        return PeerUrlUtil.remotePeers(consensusProperties.getPeers(), selfUrl);
+    }
+
+    private void reconcileTransactionCounterparties(String network, String rawTxHex, String senderAddress) {
+        if (accountReconciliationService == null || rawTxHex == null || rawTxHex.isBlank()) {
+            return;
+        }
+        try {
+            TxDecoder.ParsedTx tx = TxDecoder.parseTx(rawTxHex);
+            if (!tx.isValid() || tx.getParsedPayload() == null) {
+                return;
+            }
+            String recipient = tx.getParsedPayload().getToAddr();
+            if (recipient != null && !recipient.isBlank() && !recipient.equals(senderAddress)) {
+                accountReconciliationService.reconcileAccount(network, recipient);
+            }
+            if (tx.getType() == 1) {
+                reconcileIfPresent(network, tx.getParsedPayload().getBuyer(), senderAddress);
+                reconcileIfPresent(network, tx.getParsedPayload().getSeller(), senderAddress);
+                reconcileIfPresent(network, tx.getParsedPayload().getArbiter(), senderAddress);
+            }
+        } catch (Exception e) {
+            log.debug("[CONSENSUS][{}] Counterparty reconciliation skipped: {}", network, e.getMessage());
+        }
+    }
+
+    private void reconcileIfPresent(String network, String address, String senderAddress) {
+        if (address == null || address.isBlank() || address.equals(senderAddress)) {
+            return;
+        }
+        accountReconciliationService.reconcileAccount(network, address);
     }
 
     private int quorum(int totalNodes) {
