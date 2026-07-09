@@ -431,7 +431,7 @@ app:
 Build:
 
 ```bash
-cd /home/noob_coder/Desktop/M3R_Coin/Node_Software
+cd /M3R-Node-Software
 mvn clean package -DskipTests
 ```
 
@@ -458,18 +458,26 @@ KEY2=$(openssl rand -hex 32)
 KEY3=$(openssl rand -hex 32)
 ```
 
-Run one node:
+Run one node in port 5000:
 
 ```bash
 java -jar target/m3r-wallet-server-1.0.0.jar \
-  --server.port=3000 \
-  '--spring.datasource.url=jdbc:mysql://localhost:3306/m3rwallet_node_3000?allowPublicKeyRetrieval=true&useSSL=false&serverTimezone=UTC' \
+  --server.port=5000 \
+  '--spring.datasource.url=jdbc:mysql://localhost:3306/m3rwallet_load_5000?allowPublicKeyRetrieval=true&useSSL=false&serverTimezone=UTC' \
   --spring.datasource.username=root \
   --spring.datasource.password="$MYSQL_ROOT_PASSWORD" \
-  --app.node.private-key="$KEY1" \
-  --app.node.self-url=http://localhost:3000 \
-  --app.blockchain.network=testnet \
-  --app.consensus.enabled=false
+  --app.node.private-key="KEY1" \
+  --app.node.self-url=http://localhost:5000 \
+  --app.validator.enabled=true \
+  --app.validator.stake=10000 \
+  --app.validator.selection-mode=round-robin \
+  --app.validator.startup-proposal-delay-ms=25000 \
+  --app.blockchain.network=mainnet \
+  --app.node.block-sync-interval-ms=10000 \
+  --app.consensus.enabled=true \
+  --app.consensus.peers[0]=$PEER[0]_URL \
+  --app.consensus.peers[1]=$PEER[1]_URL \
+  --app.consensus.shared-secret=local-test-secret
 ```
 
 For three nodes, use separate ports/databases/keys and configure each node's `app.consensus.peers` to point to the other two nodes.
