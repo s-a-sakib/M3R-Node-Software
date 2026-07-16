@@ -62,35 +62,60 @@ public class AdminDashboardController {
 
     @GetMapping("/accounts")
     public String accounts(@RequestParam(required = false, defaultValue = "mainnet") String network,
-                           @RequestParam(required = false, defaultValue = "") String q,
-                           Model model) {
-        return dashboard(model);
+                        @RequestParam(required = false, defaultValue = "") String q,
+                        Model model) {
+        List<Account> accounts = accountService.getAccountsByNetwork(network).stream()
+                .filter(acc -> matchesAccount(acc, q))
+                .collect(Collectors.toList());
+        model.addAttribute("accounts", accounts);
+        model.addAttribute("network", network);
+        model.addAttribute("q", q);
+        model.addAttribute("networks", new String[]{"mainnet", "testnet", "legacy"});
+        return "admin/accounts";
     }
 
     @GetMapping("/transactions")
     public String transactions(@RequestParam(required = false, defaultValue = "mainnet") String network,
-                               @RequestParam(required = false, defaultValue = "") String q,
-                               Model model) {
-        return dashboard(model);
+                            @RequestParam(required = false, defaultValue = "") String q,
+                            Model model) {
+        List<Transaction> transactions = transactionService.getTransactionsByNetwork(network).stream()
+                .filter(tx -> matchesTransaction(tx, q))
+                .sorted(Comparator.comparing(Transaction::getCreatedAt, Comparator.nullsLast(Comparator.reverseOrder())))
+                .collect(Collectors.toList());
+        model.addAttribute("transactions", transactions);
+        model.addAttribute("network", network);
+        model.addAttribute("q", q);
+        model.addAttribute("networks", new String[]{"mainnet", "testnet", "legacy"});
+        return "admin/transactions";
     }
 
     @GetMapping("/escrows")
     public String escrows(@RequestParam(required = false, defaultValue = "mainnet") String network,
-                          @RequestParam(required = false, defaultValue = "") String q,
-                          Model model) {
-        return dashboard(model);
+                        @RequestParam(required = false, defaultValue = "") String q,
+                        Model model) {
+        List<Escrow> escrows = escrowService.getEscrowsByNetwork(network).stream()
+                .filter(escrow -> matchesEscrow(escrow, q))
+                .sorted(Comparator.comparing(Escrow::getCreatedAt, Comparator.nullsLast(Comparator.reverseOrder())))
+                .collect(Collectors.toList());
+        model.addAttribute("escrows", escrows);
+        model.addAttribute("network", network);
+        model.addAttribute("q", q);
+        model.addAttribute("networks", new String[]{"mainnet", "testnet", "legacy"});
+        return "admin/escrows";
     }
 
     @GetMapping("/blocks")
     public String blocks(@RequestParam(required = false, defaultValue = "mainnet") String network,
-                         Model model) {
-        return dashboard(model);
+                        Model model) {
+        model.addAttribute("network", network);
+        return "admin/blocks";
     }
 
     @GetMapping("/validators")
     public String validators(@RequestParam(required = false, defaultValue = "mainnet") String network,
-                             Model model) {
-        return dashboard(model);
+                            Model model) {
+        model.addAttribute("network", network);
+        return "admin/validators";
     }
 
     @PostMapping("/accounts/search")

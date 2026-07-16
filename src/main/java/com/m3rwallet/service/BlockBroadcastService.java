@@ -11,6 +11,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -35,6 +37,9 @@ public class BlockBroadcastService {
 
     @Autowired(required = false)
     private ConsensusProperties consensusProperties;
+
+    @Autowired
+    private PeerAuthService peerAuthService;
 
     @Autowired(required = false)
     private BlockValidationService blockValidationService;
@@ -96,7 +101,7 @@ public class BlockBroadcastService {
             for (String peer : peerUrls) {
                 try {
                     String url = peer + "/" + network + "/blocks/receive";
-                    ResponseEntity<Map> response = restTemplate.postForEntity(url, payload, Map.class);
+                    ResponseEntity<Map> response = restTemplate.postForEntity(url, withAuthHeader(payload), Map.class);
                     log.info("Block {} broadcast to {}: {}",
                             block.getBlockHeight(), peer, response.getStatusCode());
                 } catch (Exception e) {
@@ -158,7 +163,7 @@ public class BlockBroadcastService {
                 if (peer.equals(self)) continue; // avoid self
                 try {
                     String url = peer + "/" + network + "/blocks/receive";
-                    ResponseEntity<Map> response = restTemplate.postForEntity(url, payload, Map.class);
+                    ResponseEntity<Map> response = restTemplate.postForEntity(url, withAuthHeader(payload), Map.class);
                     log.info("[BROADCAST] Block {} → {} : {}", block.getBlockHeight(), peer, response.getStatusCode());
                 } catch (Exception e) {
                     log.warn("[BROADCAST] Failed to send block {} to {}: {}", block.getBlockHeight(), peer, e.getMessage());
@@ -181,6 +186,15 @@ public class BlockBroadcastService {
         } catch (Exception e) {
             return "http://localhost:" + System.getProperty("server.port", "3000");
         }
+    }
+
+    private HttpEntity<Map<String, Object>> withAuthHeader(Map<String, Object> payload) {
+        HttpHeaders headers = new HttpHeaders();
+        String secret = consensusProperties != null ? consensusProperties.getSharedSecret() : null;
+        if (secret != null) {
+            headers.set(PeerAuthService.CONSENSUS_TOKEN_HEADER, secret);
+        }
+        return new HttpEntity<>(payload, headers);
     }
 
     @Transactional

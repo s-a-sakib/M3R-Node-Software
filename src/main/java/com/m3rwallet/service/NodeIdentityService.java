@@ -47,7 +47,6 @@ public class NodeIdentityService {
                 privateKeyBacked = true;
                 log.warn("[IDENTITY] *** NO PRIVATE KEY CONFIGURED ***");
                 log.warn("[IDENTITY] Generated ephemeral key (NOT persisted)");
-                log.warn("[IDENTITY] Add to startup args: --app.node.private-key={}", nodePrivateKeyHex);
             }
 
             nodePublicKeyHex = derivePublicKey(nodePrivateKeyHex);

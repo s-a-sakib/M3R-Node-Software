@@ -9,6 +9,7 @@ import com.m3rwallet.repository.PeerRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -32,6 +33,7 @@ public class PeerSyncService {
     private final String bootstrapPeersConfig;
     private final String network;
     private final ConsensusProperties consensusProperties;
+    private final PeerAuthService peerAuthService;
 
     private static final int MAX_FAIL_COUNT = 5;
     private static final long HEALTH_CHECK_INTERVAL = 30_000L;
@@ -43,7 +45,8 @@ public class PeerSyncService {
                            @Value("${app.node.self-url}") String selfUrl,
                            @Value("${app.node.bootstrap-peers:}") String bootstrapPeersConfig,
                            @Value("${app.blockchain.network:mainnet}") String network,
-                           ConsensusProperties consensusProperties) {
+                           ConsensusProperties consensusProperties,
+                           PeerAuthService peerAuthService) {
         this.peerRepository = peerRepository;
         this.blockRepository = blockRepository;
         this.blockTransactionRepository = blockTransactionRepository;
@@ -52,6 +55,7 @@ public class PeerSyncService {
         this.bootstrapPeersConfig = bootstrapPeersConfig;
         this.network = network;
         this.consensusProperties = consensusProperties;
+        this.peerAuthService = peerAuthService;
     }
 
     @PostConstruct
@@ -203,7 +207,11 @@ public class PeerSyncService {
         for (Peer peer : peers) {
             try {
                 String url = peer.getPeerUrl() + "/api/node/block/receive";
-                HttpEntity<Block> req = new HttpEntity<>(block);
+                HttpHeaders headers = new HttpHeaders();
+                if (consensusProperties != null && consensusProperties.getSharedSecret() != null) {
+                    headers.set(PeerAuthService.CONSENSUS_TOKEN_HEADER, consensusProperties.getSharedSecret());
+                }
+                HttpEntity<Block> req = new HttpEntity<>(block, headers);
                 restTemplate.postForEntity(url, req, String.class);
                 peer.setLastSeenAt(now);
                 peer.setFailCount(0);

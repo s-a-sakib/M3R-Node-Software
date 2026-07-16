@@ -20,6 +20,7 @@ import com.m3rwallet.service.MempoolService;
 import com.m3rwallet.service.NodeIdentityService;
 import com.m3rwallet.service.NodeConsensusService;
 import com.m3rwallet.service.TxLedgerService;
+import com.m3rwallet.service.PeerAuthService;
 import com.m3rwallet.service.ValidatorService;
 import com.m3rwallet.service.WalletService;
 import com.m3rwallet.util.AddressUtil;
@@ -85,6 +86,9 @@ public class WalletController {
     @Autowired(required = false)
     @Lazy
     private BlockBroadcastService blockBroadcastService;
+
+    @Autowired
+    private PeerAuthService peerAuthService;
 
     /**
      * Factory method to create network-specific routers
@@ -290,8 +294,7 @@ public class WalletController {
     }
 
     private boolean isConsensusTokenAllowed(String token) {
-        String expected = consensusProperties.getSharedSecret();
-        return expected == null || expected.isBlank() || expected.equals(token);
+        return peerAuthService.isAuthorized(token);
     }
 
     @GetMapping("/{network}/tx/status")
@@ -687,7 +690,12 @@ public class WalletController {
     @ResponseBody
     public ResponseEntity<?> receiveBlock(
             @PathVariable String network,
-            @RequestBody Map<String, Object> payload) {
+            @RequestBody Map<String, Object> payload,
+            @RequestHeader(value = PeerAuthService.CONSENSUS_TOKEN_HEADER, required = false) String token) {
+        if (!peerAuthService.isAuthorized(token)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("status", "REJECTED", "error", "Invalid or missing consensus token"));
+        }
         try {
             if (blockBroadcastService == null) {
                 return ResponseEntity.ok(Map.of("status", "DISABLED"));
@@ -706,7 +714,14 @@ public class WalletController {
     @ResponseBody
     public ResponseEntity<?> voteOnBlock(
             @PathVariable String network,
-            @RequestBody Map<String, Object> payload) {
+            @RequestBody Map<String, Object> payload,
+            @RequestHeader(value = PeerAuthService.CONSENSUS_TOKEN_HEADER, required = false) String token) {
+        if (!peerAuthService.isAuthorized(token)) {
+            Map<String, Object> rejected = new LinkedHashMap<>();
+            rejected.put("vote", false);
+            rejected.put("reason", "UNAUTHORIZED");
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(rejected);
+        }
         try {
             Long blockHeight = getLong(payload, "blockHeight");
             String blockHash = (String) payload.get("blockHash");

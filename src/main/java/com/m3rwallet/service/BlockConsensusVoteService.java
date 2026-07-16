@@ -7,6 +7,8 @@ import com.m3rwallet.repository.ValidatorRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
@@ -32,6 +34,9 @@ public class BlockConsensusVoteService {
 
     @Autowired(required = false)
     private NodeIdentityService nodeIdentityService;
+
+    @Autowired
+    private PeerAuthService peerAuthService;
 
     @Value("${app.blockchain.network:mainnet}")
     private String network;
@@ -69,7 +74,12 @@ public class BlockConsensusVoteService {
             for (String peer : peers) {
                 try {
                     String url = peer + "/" + network + "/blocks/vote";
-                    Map response = restTemplate.postForObject(url, voteRequest, Map.class);
+                    HttpHeaders headers = new HttpHeaders();
+                    String secret = consensusProperties != null ? consensusProperties.getSharedSecret() : null;
+                    if (secret != null) {
+                        headers.set(PeerAuthService.CONSENSUS_TOKEN_HEADER, secret);
+                    }
+                    Map response = restTemplate.postForObject(url, new HttpEntity<>(voteRequest, headers), Map.class);
                     if (response == null) continue;
 
                     boolean vote = Boolean.TRUE.equals(response.get("vote"));

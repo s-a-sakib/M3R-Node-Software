@@ -1,6 +1,7 @@
 package com.m3rwallet.controller;
 
 import com.m3rwallet.entity.Block;
+import com.m3rwallet.service.PeerAuthService;
 import com.m3rwallet.service.PeerSyncService;
 import com.m3rwallet.repository.BlockRepository;
 import lombok.extern.slf4j.Slf4j;
@@ -25,20 +26,27 @@ public class NodeSyncController {
     private final BlockRepository blockRepository;
     private final String network;
     private final String selfUrl;
+    private final PeerAuthService peerAuthService;
 
     public NodeSyncController(PeerSyncService peerSyncService,
                               BlockRepository blockRepository,
                               @Value("${app.blockchain.network:mainnet}") String network,
-                              @Value("${app.node.self-url}") String selfUrl) {
+                              @Value("${app.node.self-url}") String selfUrl,
+                              PeerAuthService peerAuthService) {
         this.peerSyncService = peerSyncService;
         this.blockRepository = blockRepository;
         this.network = network;
         this.selfUrl = selfUrl;
+        this.peerAuthService = peerAuthService;
     }
 
     @PostMapping("/block/receive")
     @Transactional
-    public ResponseEntity<?> receiveBlock(@RequestBody Block block) {
+    public ResponseEntity<?> receiveBlock(@RequestBody Block block,
+            @RequestHeader(value = PeerAuthService.CONSENSUS_TOKEN_HEADER, required = false) String token) {
+        if (!peerAuthService.isAuthorized(token)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("message", "invalid or missing consensus token"));
+        }
         if (block == null || block.getBlockHash() == null || block.getBlockHash().isBlank() || block.getBlockHeight() == null || block.getBlockHeight() <= 0) {
             return ResponseEntity.badRequest().body(Map.of("message", "invalid block"));
         }
@@ -114,7 +122,11 @@ public class NodeSyncController {
     }
 
     @PostMapping("/peer/announce")
-    public ResponseEntity<?> announce(@RequestBody Map<String, String> body) {
+    public ResponseEntity<?> announce(@RequestBody Map<String, String> body,
+            @RequestHeader(value = PeerAuthService.CONSENSUS_TOKEN_HEADER, required = false) String token) {
+        if (!peerAuthService.isAuthorized(token)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("accepted", false, "error", "invalid or missing consensus token"));
+        }
         String peerUrl = body.get("peerUrl");
         peerSyncService.announceSelf(peerUrl);
         return ResponseEntity.ok(Map.of("accepted", true));
