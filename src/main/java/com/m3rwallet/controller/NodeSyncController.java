@@ -2,8 +2,10 @@ package com.m3rwallet.controller;
 
 import com.m3rwallet.entity.Block;
 import com.m3rwallet.service.PeerSyncService;
+import com.m3rwallet.service.BlockBroadcastService;
 import com.m3rwallet.repository.BlockRepository;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -26,6 +28,12 @@ public class NodeSyncController {
     private final String network;
     private final String selfUrl;
 
+    @Autowired(required = false)
+    private BlockBroadcastService blockBroadcastService;
+
+    @Autowired(required = false)
+    private com.m3rwallet.service.BlockConsensusVoteService blockConsensusVoteService;
+
     public NodeSyncController(PeerSyncService peerSyncService,
                               BlockRepository blockRepository,
                               @Value("${app.blockchain.network:mainnet}") String network,
@@ -36,34 +44,34 @@ public class NodeSyncController {
         this.selfUrl = selfUrl;
     }
 
+    public void setBlockBroadcastService(BlockBroadcastService blockBroadcastService) {
+        this.blockBroadcastService = blockBroadcastService;
+    }
+
     @PostMapping("/block/receive")
-    @Transactional
-    public ResponseEntity<?> receiveBlock(@RequestBody Block block) {
-        if (block == null || block.getBlockHash() == null || block.getBlockHash().isBlank() || block.getBlockHeight() == null || block.getBlockHeight() <= 0) {
-            return ResponseEntity.badRequest().body(Map.of("message", "invalid block"));
+    @ResponseBody
+    public ResponseEntity<?> receiveBlock(@RequestBody Map<String, Object> payload) {
+        if (payload == null || payload.isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("message", "invalid block", "status", "REJECTED"));
         }
-        Optional<Block> exists = blockRepository.findByBlockHashAndNetwork(block.getBlockHash(), block.getNetwork());
-        if (exists.isPresent()) {
-            return ResponseEntity.ok(Map.of("message", "Already have block"));
+        if (blockBroadcastService == null) {
+            log.error("[RECEIVE] BlockBroadcastService unavailable to validate block reception");
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(Map.of("error", "Consensus validation service unavailable"));
         }
-        Optional<Block> sameHeight = blockRepository.findById(block.getBlockHeight());
-        if (sameHeight.isPresent()) {
-            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
-                    "message", "height already exists",
-                    "blockHeight", block.getBlockHeight()));
+        String effectiveNet = (String) payload.getOrDefault("network", this.network);
+        Map<String, Object> result = blockBroadcastService.receiveBlock(payload, effectiveNet);
+        String status = String.valueOf(result.getOrDefault("status", "REJECTED"));
+        if ("ACCEPTED".equalsIgnoreCase(status)) {
+            return ResponseEntity.status(HttpStatus.CREATED).body(result);
+        } else if ("ALREADY_KNOWN".equalsIgnoreCase(status)) {
+            return ResponseEntity.ok(result);
+        } else if ("FORK_CONFLICT".equalsIgnoreCase(status)) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(result);
+        } else if ("STAGED_UNFINALIZED".equalsIgnoreCase(status)) {
+            return ResponseEntity.status(HttpStatus.ACCEPTED).body(result);
+        } else {
+            return ResponseEntity.badRequest().body(result);
         }
-        if (block.getBlockHeight() > 1) {
-            Optional<Block> parent = blockRepository.findById(block.getBlockHeight() - 1);
-            if (parent.isEmpty() || !java.util.Objects.equals(parent.get().getBlockHash(), block.getParentBlockHash())) {
-                return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
-                        "message", "parent missing or mismatched",
-                        "blockHeight", block.getBlockHeight()));
-            }
-        }
-        block.setIsFinalized(true);
-        blockRepository.save(block);
-        log.info("Received block height={} from peer network={}", block.getBlockHeight(), block.getNetwork());
-        return ResponseEntity.status(HttpStatus.CREATED).body(block);
     }
 
     @GetMapping("/block/latest")
@@ -93,7 +101,16 @@ public class NodeSyncController {
     public ResponseEntity<?> blockByHeight(@PathVariable Long height) {
         Optional<Block> opt = blockRepository.findById(height);
         if (opt.isEmpty()) return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("message", "not found"));
-        return ResponseEntity.ok(opt.get());
+        Block b = opt.get();
+        if ((b.getConsensusCertificate() == null || b.getConsensusCertificate().isBlank()) && blockConsensusVoteService != null) {
+            Map<String, Object> cert = blockConsensusVoteService.getCertificate(b.getNetwork(), b.getBlockHeight(), b.getBlockHash());
+            if (cert != null) {
+                try {
+                    b.setConsensusCertificate(new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(cert));
+                } catch (Exception ignored) {}
+            }
+        }
+        return ResponseEntity.ok(b);
     }
 
     @GetMapping("/health")

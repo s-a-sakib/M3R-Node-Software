@@ -133,6 +133,27 @@ public class AddressUtil {
         }
     }
 
+    public static String deriveAddressFromPublicKey(byte[] pubKeyBytes) {
+        if (pubKeyBytes == null) return null;
+        try {
+            byte[] hash = CryptoUtil.keccak256(pubKeyBytes);
+            byte[] addr20 = Arrays.copyOfRange(hash, hash.length - 20, hash.length);
+            return encodeHex20ToBase58(Hex.encodeHexString(addr20));
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    public static String deriveAddressFromPublicKey(String pubKeyHex) {
+        if (pubKeyHex == null || pubKeyHex.isBlank()) return null;
+        try {
+            byte[] bytes = Hex.decodeHex(pubKeyHex.trim());
+            return deriveAddressFromPublicKey(bytes);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     /**
      * Compute Keccak256 hash of hex string
      */

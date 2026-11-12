@@ -18,8 +18,12 @@ import java.nio.ByteBuffer;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Core service implementing PoS+PoR validator logic.
@@ -35,6 +39,34 @@ public class ValidatorService {
     private final NodeIdentityService nodeIdentityService;
     private final ValidatorSyncService validatorSyncService;
     private final AccountRepository accountRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.m3rwallet.repository.ValidatorSnapshotRepository validatorSnapshotRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.m3rwallet.repository.BlockRepository blockRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.fasterxml.jackson.databind.ObjectMapper objectMapper;
+
+    public void setValidatorSnapshotRepository(com.m3rwallet.repository.ValidatorSnapshotRepository validatorSnapshotRepository) {
+        this.validatorSnapshotRepository = validatorSnapshotRepository;
+    }
+
+    public void setBlockRepository(com.m3rwallet.repository.BlockRepository blockRepository) {
+        this.blockRepository = blockRepository;
+    }
+
+    public void setObjectMapper(com.fasterxml.jackson.databind.ObjectMapper objectMapper) {
+        this.objectMapper = objectMapper;
+    }
+
+    private com.fasterxml.jackson.databind.ObjectMapper getObjectMapper() {
+        if (this.objectMapper == null) {
+            this.objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        }
+        return this.objectMapper;
+    }
 
     @Value("${app.validator.minimum-stake:1000}")
     private long minimumStake;
@@ -57,18 +89,222 @@ public class ValidatorService {
     @Value("${app.validator.selection-mode:round-robin}")
     private String selectionMode;
 
+    @Value("${app.validator.alpha:0.15}")
+    private double alpha = 0.15d;
+
+    public record ValidatorSnapshotItem(
+            String address,
+            BigDecimal stakedAmount,
+            Long reliabilityScoreScaled,
+            double weight
+    ) {}
+
+    public record ValidatorSetSnapshot(
+            String snapshotHash,
+            String network,
+            Long blockHeight,
+            Long timestamp,
+            List<ValidatorSnapshotItem> validators,
+            Map<String, Double> weights
+    ) {}
+
+    private final Map<String, ValidatorSetSnapshot> snapshotCacheByHash = new ConcurrentHashMap<>();
+    private final Map<String, ValidatorSetSnapshot> snapshotCacheByHeight = new ConcurrentHashMap<>();
+
+    @jakarta.annotation.PostConstruct
+    public void initSnapshots() {
+        if (validatorSnapshotRepository != null) {
+            try {
+                List<com.m3rwallet.entity.HistoricalValidatorSnapshot> list = validatorSnapshotRepository.findAll();
+                for (com.m3rwallet.entity.HistoricalValidatorSnapshot entity : list) {
+                    ValidatorSetSnapshot snap = deserializeSnapshotEntity(entity);
+                    if (snap != null) {
+                        snapshotCacheByHash.put(snap.snapshotHash().toLowerCase(), snap);
+                        if (snap.network() != null && snap.blockHeight() != null) {
+                            snapshotCacheByHeight.put(snap.network() + ":" + snap.blockHeight(), snap);
+                        }
+                    }
+                }
+                log.info("[SNAPSHOT] Loaded {} durable validator snapshots from database", snapshotCacheByHash.size());
+            } catch (Exception e) {
+                log.warn("[SNAPSHOT] Could not preload snapshots: {}", e.getMessage());
+            }
+        }
+    }
+
+    public Optional<ValidatorSetSnapshot> getSnapshotByHash(String snapshotHash) {
+        if (snapshotHash == null || snapshotHash.isBlank()) return Optional.empty();
+        String normHash = snapshotHash.trim().toLowerCase();
+        ValidatorSetSnapshot cached = snapshotCacheByHash.get(normHash);
+        if (cached != null) return Optional.of(cached);
+
+        if (validatorSnapshotRepository != null) {
+            try {
+                Optional<com.m3rwallet.entity.HistoricalValidatorSnapshot> entityOpt = validatorSnapshotRepository.findBySnapshotHash(normHash);
+                if (entityOpt.isPresent()) {
+                    ValidatorSetSnapshot reconstructed = deserializeSnapshotEntity(entityOpt.get());
+                    if (reconstructed != null) {
+                        snapshotCacheByHash.put(normHash, reconstructed);
+                        if (reconstructed.network() != null && reconstructed.blockHeight() != null) {
+                            snapshotCacheByHeight.put(reconstructed.network() + ":" + reconstructed.blockHeight(), reconstructed);
+                        }
+                        return Optional.of(reconstructed);
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("[SNAPSHOT] Failed to load snapshot {} from database: {}", normHash, e.getMessage());
+            }
+        }
+        return Optional.empty();
+    }
+
+    public ValidatorSetSnapshot deserializeSnapshotEntity(com.m3rwallet.entity.HistoricalValidatorSnapshot entity) {
+        if (entity == null || entity.getSnapshotDataJson() == null) return null;
+        try {
+            com.fasterxml.jackson.core.type.TypeReference<List<ValidatorSnapshotItem>> typeRef =
+                    new com.fasterxml.jackson.core.type.TypeReference<>() {};
+            List<ValidatorSnapshotItem> items = getObjectMapper().readValue(entity.getSnapshotDataJson(), typeRef);
+            if (items == null) return null;
+
+            // Reconstruct active validators and recompute validatorSetHash to verify integrity
+            List<Validator> reconstructedValidators = new ArrayList<>();
+            Map<String, Double> weights = new LinkedHashMap<>();
+            for (ValidatorSnapshotItem item : items) {
+                Validator val = Validator.builder()
+                        .address(item.address())
+                        .network(entity.getNetwork())
+                        .stakedAmount(item.stakedAmount())
+                        .reliabilityScoreScaled(item.reliabilityScoreScaled())
+                        .status(Validator.ValidatorStatus.ACTIVE)
+                        .build();
+                reconstructedValidators.add(val);
+                if (item.weight() > 0.0) {
+                    weights.put(item.address(), item.weight());
+                } else {
+                    double w = calculateWeight(val);
+                    if (w > 0.0) weights.put(val.getAddress(), w);
+                }
+            }
+
+            String recomputedHash = BlockValidationService.computeValidatorSetHash(reconstructedValidators);
+            if (!recomputedHash.equalsIgnoreCase(entity.getSnapshotHash())) {
+                log.error("[SECURITY] Historical validator snapshot hash TAMPERING DETECTED for height {}! Expected: {} but recomputed from stored contents: {}. Failing closed.",
+                        entity.getBlockHeight(), entity.getSnapshotHash(), recomputedHash);
+                return null; // Fail closed!
+            }
+
+            return new ValidatorSetSnapshot(
+                    entity.getSnapshotHash().toLowerCase(),
+                    entity.getNetwork(),
+                    entity.getBlockHeight(),
+                    entity.getCapturedAt(),
+                    items,
+                    weights
+            );
+        } catch (Exception e) {
+            log.error("[SECURITY] Failed to deserialize historical snapshot {}: {}", entity.getSnapshotHash(), e.getMessage());
+            return null;
+        }
+    }
+
+    public Optional<ValidatorSetSnapshot> getSnapshotForBlock(String network, Long blockHeight, String snapshotHash) {
+        if (snapshotHash != null && !snapshotHash.isBlank()) {
+            Optional<ValidatorSetSnapshot> byHash = getSnapshotByHash(snapshotHash);
+            if (byHash.isPresent()) return byHash;
+        }
+        if (network != null && blockHeight != null) {
+            return Optional.ofNullable(snapshotCacheByHeight.get(network + ":" + blockHeight));
+        }
+        return Optional.empty();
+    }
+
+    public ValidatorSetSnapshot recordSnapshot(String network, Long blockHeight, List<Validator> validators) {
+        if (validators == null) validators = List.of();
+        List<ValidatorSnapshotItem> items = new ArrayList<>();
+        Map<String, Double> weights = new LinkedHashMap<>();
+        for (Validator v : validators) {
+            if (v != null && v.getAddress() != null && !v.getAddress().isBlank() && v.isActive()) {
+                double w = calculateWeight(v);
+                items.add(new ValidatorSnapshotItem(v.getAddress(), v.getStakedAmount(), v.getReliabilityScoreScaled(), w));
+                if (w > 0.0) {
+                    weights.put(v.getAddress(), w);
+                }
+            }
+        }
+        String hash = BlockValidationService.computeValidatorSetHash(validators);
+        String normHash = hash.toLowerCase();
+
+        // Durable persistence in database
+        if (validatorSnapshotRepository != null) {
+            try {
+                Optional<com.m3rwallet.entity.HistoricalValidatorSnapshot> existing = validatorSnapshotRepository.findBySnapshotHash(normHash);
+                if (existing.isPresent()) {
+                    // Ensure snapshot cannot be silently overwritten with differing contents
+                    ValidatorSetSnapshot existingSnap = deserializeSnapshotEntity(existing.get());
+                    if (existingSnap != null && !normHash.equalsIgnoreCase(existingSnap.snapshotHash())) {
+                        throw new IllegalStateException("Snapshot collision or tampering for hash: " + normHash);
+                    }
+                } else {
+                    String json = getObjectMapper().writeValueAsString(items);
+                    com.m3rwallet.entity.HistoricalValidatorSnapshot entity = com.m3rwallet.entity.HistoricalValidatorSnapshot.builder()
+                            .snapshotHash(normHash)
+                            .network(network == null ? defaultNetwork : network)
+                            .blockHeight(blockHeight == null ? 0L : blockHeight)
+                            .capturedAt(System.currentTimeMillis())
+                            .snapshotDataJson(json)
+                            .build();
+                    validatorSnapshotRepository.save(entity);
+                    log.info("[SNAPSHOT] Durably persisted historical snapshot {} for height {}", normHash, blockHeight);
+                }
+            } catch (Exception e) {
+                log.warn("[SNAPSHOT] Could not durably persist snapshot {}: {}", normHash, e.getMessage());
+            }
+        }
+
+        ValidatorSetSnapshot snapshot = new ValidatorSetSnapshot(
+                normHash, network, blockHeight, System.currentTimeMillis(), items, weights);
+        snapshotCacheByHash.put(normHash, snapshot);
+        if (network != null && blockHeight != null) {
+            snapshotCacheByHeight.put(network + ":" + blockHeight, snapshot);
+        }
+        return snapshot;
+    }
+
+    public ValidatorSetSnapshot captureCurrentSnapshot(String network, Long blockHeight) {
+        List<Validator> active = getActiveValidators(network);
+        return recordSnapshot(network, blockHeight, active);
+    }
+
+    public double getAlpha() {
+        return this.alpha;
+    }
+
+    public List<Validator> getActiveValidators(String network) {
+        if (validatorRepository == null) return List.of();
+        return validatorRepository.findByNetworkAndStatus(network, Validator.ValidatorStatus.ACTIVE);
+    }
+
+    public void setAlpha(double alpha) {
+        this.alpha = Math.max(0.0d, Math.min(1.0d, alpha));
+    }
+
     /**
      * Calculate weight for a validator using formula:
-     * W_v = 0.15 * log(1 + S_v) + 0.85 * R_v
+     * W_v = alpha * log(1 + S_v) + (1 - alpha) * R_v
      * Returns 0.0 for non-ACTIVE validators.
      */
     public double calculateWeight(Validator v) {
+        return calculateWeight(v, this.alpha);
+    }
+
+    public double calculateWeight(Validator v, double alphaParam) {
         if (v == null) throw new IllegalArgumentException("Validator is null");
         if (!v.isActive()) return 0.0d;
+        double a = Math.max(0.0d, Math.min(1.0d, alphaParam));
         double S_v = (v.getStakedAmount() == null) ? 0.0d : v.getStakedAmount().doubleValue();
         double R_v = v.getReliabilityScore();
-        double stakeComponent = 0.15d * Math.log(1.0d + S_v);
-        double reputationComponent = 0.85d * R_v;
+        double stakeComponent = a * Math.log(1.0d + S_v);
+        double reputationComponent = (1.0d - a) * R_v;
         double weight = stakeComponent + reputationComponent;
         return Math.max(0.0d, weight);
     }
@@ -78,11 +314,18 @@ public class ValidatorService {
      * @throws RuntimeException when no active validators are found
      */
     public Validator selectValidatorForSlot(long slotNumber, String network) {
-        List<Validator> validators = validatorRepository.findByNetworkAndStatus(network, Validator.ValidatorStatus.ACTIVE);
-        if (validators == null || validators.isEmpty()) {
+        return selectValidatorForSlot(slotNumber, network, null);
+    }
+
+    public Validator selectValidatorForSlot(long slotNumber, String network, List<Validator> pool) {
+        List<Validator> rawValidators = (pool != null && !pool.isEmpty())
+                ? pool
+                : validatorRepository.findByNetworkAndStatus(network, Validator.ValidatorStatus.ACTIVE);
+        if (rawValidators == null || rawValidators.isEmpty()) {
             throw new RuntimeException("No active validators for network: " + network);
         }
 
+        List<Validator> validators = new ArrayList<>(rawValidators);
         validators.sort(Comparator.comparing(Validator::getAddress));
 
         if (!"weighted".equalsIgnoreCase(selectionMode)) {
@@ -134,19 +377,70 @@ public class ValidatorService {
     }
 
     /**
-     * Record a successful proposal: increments counters and increases reliability by 0.01 (capped at 1.0).
+     * Record a successful proposal: derives counts deterministically and idempotently from canonical finalized blocks.
      */
     @Transactional
     public void recordSuccessfulProposal(String address, String network) {
         Validator v = validatorRepository.findByAddressAndNetwork(address, network)
                 .orElseThrow(() -> new IllegalArgumentException("Validator not found: " + address));
-        v.setSuccessfulProposals(v.getSuccessfulProposals() + 1);
-        v.setTotalProposals(v.getTotalProposals() + 1);
-        double newR = Math.min(1.0d, v.getReliabilityScore() + 0.01d);
-        v.setReliabilityScore(newR);
-        v.setLastProposalAt(System.currentTimeMillis());
-        validatorRepository.save(v);
-        log.info("[PROPOSAL] Recorded successful proposal for {} on {} newR={}", address, network, newR);
+
+        long prevProposals = v.getSuccessfulProposals() == null ? 0L : v.getSuccessfulProposals();
+        double currentR = v.getReliabilityScore();
+
+        if (blockRepository != null) {
+            long canonicalProposals = blockRepository.countByProposerAddressAndNetworkAndIsFinalized(address, network, true);
+            v.setSuccessfulProposals(canonicalProposals);
+            long currentTotal = v.getTotalProposals() == null ? 0L : v.getTotalProposals();
+            v.setTotalProposals(Math.max(currentTotal, canonicalProposals));
+
+            if (canonicalProposals > prevProposals) {
+                long delta = canonicalProposals - prevProposals;
+                double newR = Math.min(1.0d, currentR + (delta * 0.01d));
+                v.setReliabilityScore(newR);
+            } else if (canonicalProposals < prevProposals) {
+                long delta = prevProposals - canonicalProposals;
+                double newR = Math.max(0.0d, currentR - (delta * 0.01d));
+                v.setReliabilityScore(newR);
+            }
+            // If canonicalProposals == prevProposals, idempotent (no change to reliability)
+            v.setLastProposalAt(System.currentTimeMillis());
+            validatorRepository.save(v);
+            log.info("[PROPOSAL] Recorded canonical proposal for {} on {} count={} R={}", address, network, canonicalProposals, v.getReliabilityScore());
+        } else {
+            long nextProposals = prevProposals + 1L;
+            v.setSuccessfulProposals(nextProposals);
+            long currentTotal = v.getTotalProposals() == null ? 0L : v.getTotalProposals();
+            v.setTotalProposals(Math.max(currentTotal, nextProposals));
+            double newR = Math.min(1.0d, currentR + 0.01d);
+            v.setReliabilityScore(newR);
+            v.setLastProposalAt(System.currentTimeMillis());
+            validatorRepository.save(v);
+            log.info("[PROPOSAL] Recorded proposal for {} on {} count={} R={}", address, network, nextProposals, newR);
+        }
+    }
+
+    /**
+     * Reconciles proposal counts and reputation from canonical finalized block records.
+     */
+    @Transactional
+    public void reconcileProposalStatistics(String address, String network) {
+        recordSuccessfulProposal(address, network);
+    }
+
+    @Transactional
+    public void reconcileAllValidatorProposalStatistics(String network) {
+        if (validatorRepository == null || blockRepository == null) return;
+        List<Validator> all = validatorRepository.findByNetwork(network);
+        if (all == null) return;
+        for (Validator v : all) {
+            if (v.getAddress() != null && !v.getAddress().isBlank()) {
+                try {
+                    recordSuccessfulProposal(v.getAddress(), network);
+                } catch (Exception e) {
+                    log.warn("Could not reconcile stats for {}: {}", v.getAddress(), e.getMessage());
+                }
+            }
+        }
     }
 
     /**

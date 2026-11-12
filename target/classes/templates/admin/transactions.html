@@ -1,4 +1,56 @@
 <!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>M3R Node Admin — Transactions</title>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Sora:wght@300;400;600&display=swap" rel="stylesheet">
+  <style>
+    :root{--bg:#07080f;--surface:#0d0f1a;--panel:#111422;--border:#1e2235;--accent:#00d4aa;--warn:#f0a500;--danger:#e84560;--text:#e2e6f3;--muted:#5a6180;--mono:'JetBrains Mono',monospace;--ui:'Sora',sans-serif}
+    body{margin:0;font-family:var(--ui);background:var(--bg);color:var(--text)}
+    .sidebar{width:220px;background:var(--surface);border-right:1px solid var(--border);position:fixed;inset:0;padding:20px}
+    .main{margin-left:220px;padding:20px}
+    .panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:14px}
+    table{width:100%;border-collapse:collapse}
+    thead th{font-size:11px;color:var(--muted);padding:10px;border-bottom:1px solid var(--border);text-align:left}
+    tbody td{padding:12px;border-bottom:1px solid var(--border)}
+    .mono{font-family:var(--mono)}.muted{color:var(--muted)}.teal{color:var(--accent)}
+    .copy-btn{background:none;border:none;color:var(--muted);cursor:pointer;font-family:var(--mono);padding:4px;border-radius:4px}
+    .pill-confirm{background:rgba(0,212,170,.08);color:var(--accent);padding:4px 8px;border-radius:10px}
+    .pill-pending{background:rgba(240,165,0,.08);color:var(--warn);padding:4px 8px;border-radius:10px}
+    .pill-failed{background:rgba(232,69,96,.08);color:var(--danger);padding:4px 8px;border-radius:10px}
+  </style>
+</head>
+<body>
+  <aside class="sidebar"><div style="font-family:var(--mono);color:var(--accent);font-size:20px">M3R <span style="color:var(--text);font-weight:400;margin-left:6px">NODE ADMIN</span></div></aside>
+  <main class="main">
+    <header style="height:64px;display:flex;align-items:center;justify-content:space-between"><div style="font-weight:600">Transactions</div><div class="muted mono">Server-rendered list</div></header>
+    <div class="panel">
+      <div style="overflow:auto">
+        <table>
+          <thead><tr><th>HASH</th><th>FROM</th><th>TO</th><th>AMOUNT</th><th>STATUS</th><th>TIME</th></tr></thead>
+          <tbody>
+            <tr th:each="tx : ${transactions}">
+              <td class="mono"><span th:text="${#strings.substring(tx.hash,0,12)} + '...' + ${#strings.substring(tx.hash, tx.hash.length()-6)}">hash</span>
+                <button class="copy-btn" type="button" th:attr="data-hash=${tx.hash}" onclick="copyHash(this)">Copy</button></td>
+              <td class="mono" th:text="${tx.from}">from</td>
+              <td class="mono" th:text="${tx.to}">to</td>
+              <td class="mono" style="text-align:right" th:text="${tx.amount}">0</td>
+              <td><span th:switch="${tx.status}"><span th:case="'CONFIRMED'" class="pill-confirm">CONFIRMED</span><span th:case="'PENDING'" class="pill-pending">PENDING</span><span th:case="'FAILED'" class="pill-failed">FAILED</span></span></td>
+              <td class="muted mono" th:text="${tx.createdAt}">time</td>
+            </tr>
+            <tr th:if="${transactions == null or #lists.isEmpty(transactions)}"><td colspan="6" class="muted">No transactions</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    function copyHash(btn){ const h=btn.getAttribute('data-hash'); navigator.clipboard.writeText(h).then(()=>{ btn.textContent='Copied'; setTimeout(()=>btn.textContent='Copy',900); }); }
+  </script>
+</body>
+</html>
+<!DOCTYPE html>
 <html xmlns:th="http://www.thymeleaf.org" lang="en">
 <head>
     <meta charset="UTF-8">

@@ -146,7 +146,7 @@ public class ValidatorSyncService {
         }
     }
 
-    private boolean savePeerValidator(Map<?, ?> validatorMap) {
+    boolean savePeerValidator(Map<?, ?> validatorMap) {
         try {
             String address = stringValue(validatorMap.get("address"));
             String validatorNetwork = stringValue(validatorMap.get("network"));
@@ -160,49 +160,19 @@ public class ValidatorSyncService {
                 return false;
             }
             var existing = validatorRepository.findByAddressAndNetwork(address, validatorNetwork);
-            Validator v;
             if (existing.isPresent()) {
-                v = existing.get();
-                // Update stake if provided
-                try {
-                    var parsedStake = parseStake(validatorMap.get("stakedAmount"));
-                    if (parsedStake != null) v.setStakedAmount(parsedStake);
-                } catch (Exception ignored) {
-                }
-                // Update reliability score to the maximum observed
-                try {
-                    String rvRaw = stringValue(validatorMap.get("reliabilityScoreScaled"));
-                    if (rvRaw != null && !rvRaw.isBlank()) {
-                        long peerRv = Long.parseLong(rvRaw);
-                        Long localRv = v.getReliabilityScoreScaled() == null ? 0L : v.getReliabilityScoreScaled();
-                        if (peerRv > localRv) {
-                            v.setReliabilityScoreScaled(peerRv);
-                        }
-                    }
-                } catch (Exception ignored) {
-                }
+                // F-03 REMEDIATION: Local validator stake, reliability, and proposal counters
+                // are authoritative and derived strictly from local registration, balance locks,
+                // and finalized blocks. Unauthenticated peer-supplied JSON MUST NEVER overwrite them.
+                log.debug("[VALIDATOR SYNC] Validator {} exists locally. Preserving authoritative local state.", address);
+                return true;
             } else {
-                v = new Validator();
-                v.setAddress(address);
-                v.setNetwork(validatorNetwork);
-                v.setStakedAmount(parseStake(validatorMap.get("stakedAmount")));
-                try {
-                    String rvRaw = stringValue(validatorMap.get("reliabilityScoreScaled"));
-                    long peerRv = (rvRaw == null || rvRaw.isBlank()) ? 0L : Long.parseLong(rvRaw);
-                    v.setReliabilityScoreScaled(peerRv);
-                } catch (Exception ignored) {
-                    v.setReliabilityScoreScaled(0L);
-                }
-                v.setStatus(Validator.ValidatorStatus.ACTIVE);
-                v.setRegisteredAt(System.currentTimeMillis());
-                v.setTotalProposals(0L);
-                v.setSuccessfulProposals(0L);
-                v.setCorruptedProposals(0L);
+                // F-03 REMEDIATION: Unknown validators reported by unauthenticated peer JSON
+                // MUST NOT be activated or assigned arbitrary stake or voting weight.
+                // Registrations must occur through authoritative local registration or cryptographically verified transactions.
+                log.warn("[SECURITY][VALIDATOR SYNC] Rejected unauthenticated peer validator registration for {}", address);
+                return false;
             }
-
-            validatorRepository.save(v);
-            log.info("[VALIDATOR SYNC] Saved/Updated peer validator: {} on {}", address, validatorNetwork);
-            return true;
         } catch (Exception e) {
             log.warn("[VALIDATOR SYNC] Could not save peer validator: {}", e.getMessage());
             return false;

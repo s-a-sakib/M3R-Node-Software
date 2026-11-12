@@ -90,9 +90,12 @@ public class BlockProposalService {
         block.setIsFinalized(false);
         block.setReceivedAt(System.currentTimeMillis());
         try {
-            byte[] headerBytes = block.serializeForSigning();
-            byte[] sig = nodeIdentityService.signData(headerBytes);
+            byte[] digest = block.computeHeaderSigningDigest();
+            byte[] sig = nodeIdentityService.signData(digest);
             block.setProposerSignature(bytesToHex(sig));
+            if (nodeIdentityService != null) {
+                block.setProposerPublicKey(nodeIdentityService.getNodePublicKey());
+            }
         } catch (Exception e) {
             log.warn("Could not sign block: {}", e.getMessage());
             block.setProposerSignature("UNSIGNED");
@@ -190,13 +193,14 @@ public class BlockProposalService {
 
     public String computeValidatorSetHash(String network) {
         try {
-            // STUB: deterministic placeholder until validator set fetching implemented
-            String base = "validators:" + network;
-            MessageDigest sha256 = MessageDigest.getInstance("SHA-256");
-            return bytesToHex(sha256.digest(base.getBytes(StandardCharsets.UTF_8)));
+            if (validatorService != null) {
+                List<Validator> active = validatorService.getActiveValidators(network);
+                return BlockValidationService.computeValidatorSetHash(active);
+            }
+            return BlockValidationService.computeValidatorSetHash(List.of());
         } catch (Exception e) {
             log.error("computeValidatorSetHash failed", e);
-            return "";
+            return BlockValidationService.computeValidatorSetHash(List.of());
         }
     }
 
@@ -230,6 +234,11 @@ public class BlockProposalService {
 
     @Transactional
     public void deleteBlock(Block block) {
+        if (block == null) return;
+        if (Boolean.TRUE.equals(block.getIsFinalized())) {
+            log.error("[SECURITY] Attempted deletion of finalized block {}! Denied.", block.getBlockHeight());
+            throw new IllegalStateException("Cannot delete finalized block " + block.getBlockHeight());
+        }
         try {
             blockTransactionRepository.deleteByBlock(block);
             blockRepository.delete(block);

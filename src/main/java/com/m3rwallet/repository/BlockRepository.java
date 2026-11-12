@@ -51,6 +51,9 @@ public interface BlockRepository extends JpaRepository<Block, Long> {
     long countByIsFinalized(Boolean isFinalized);
 
     @Transactional(readOnly = true)
+    long countByProposerAddressAndNetworkAndIsFinalized(String proposerAddress, String network, Boolean isFinalized);
+
+    @Transactional(readOnly = true)
     Optional<Block> findBySlotNumberAndProposerAddressAndNetwork(Long slotNumber, String proposerAddress, String network);
 
     @Transactional(readOnly = true)
