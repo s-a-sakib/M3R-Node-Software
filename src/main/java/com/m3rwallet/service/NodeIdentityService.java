@@ -167,12 +167,7 @@ public class NodeIdentityService {
         ECDSASigner signer = new ECDSASigner();
         signer.init(true, privParams);
         BigInteger[] sig = signer.generateSignature(data);
-        byte[] r = sig[0].toByteArray();
-        byte[] s = sig[1].toByteArray();
-        byte[] result = new byte[64];
-        System.arraycopy(r, Math.max(0, r.length - 32), result, Math.max(0, 32 - r.length), Math.min(32, r.length));
-        System.arraycopy(s, Math.max(0, s.length - 32), result, Math.max(0, 64 - s.length), Math.min(32, s.length));
-        return result;
+        return com.m3rwallet.util.CryptoUtil.formatRawSignature(sig[0], sig[1]);
     }
 
     private String bytesToHex(byte[] bytes) {

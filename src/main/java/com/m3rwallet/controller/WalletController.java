@@ -86,6 +86,9 @@ public class WalletController {
     @Lazy
     private BlockBroadcastService blockBroadcastService;
 
+    @Autowired(required = false)
+    private com.m3rwallet.service.BlockConsensusVoteService blockConsensusVoteService;
+
     /**
      * Factory method to create network-specific routers
      */
@@ -612,14 +615,33 @@ public class WalletController {
             result.put("blockHash",       b.getBlockHash());
             result.put("parentBlockHash", b.getParentBlockHash());
             result.put("slotNumber",      b.getSlotNumber());
+            result.put("version",         b.getVersion());
             result.put("proposerAddress", b.getProposerAddress());
             result.put("proposerWeight",  b.getProposerWeight());
+            result.put("proposerSignature", b.getProposerSignature());
+            result.put("proposerPublicKey", b.getProposerPublicKey());
             result.put("merkleRoot",      b.getMerkleRoot());
+            result.put("stateRoot",       b.getStateRoot());
+            result.put("validatorSetHash", b.getValidatorSetHash());
+            result.put("nonce",           b.getNonce());
             result.put("txCount",         b.getTxCount());
             result.put("isFinalized",     b.getIsFinalized());
             result.put("timestamp",       b.getTimestamp());
             result.put("network",         b.getNetwork());
             result.put("transactions",    txList);
+
+            Map<String, Object> cert = null;
+            if (blockConsensusVoteService != null) {
+                cert = blockConsensusVoteService.getCertificate(network, b.getBlockHeight(), b.getBlockHash());
+            }
+            if (cert == null && b.getConsensusCertificate() != null && !b.getConsensusCertificate().isBlank()) {
+                try {
+                    cert = new com.fasterxml.jackson.databind.ObjectMapper().readValue(b.getConsensusCertificate(), Map.class);
+                } catch (Exception ignored) {}
+            }
+            if (cert != null) {
+                result.put("consensusCertificate", cert);
+            }
 
             return ResponseEntity.ok(result);
         } catch (Exception e) {
@@ -750,6 +772,20 @@ public class WalletController {
 
             boolean vote = violations.isEmpty();
 
+            String signatureHex = "";
+            String pubKeyHex = "";
+            if (vote && nodeIdentityService != null && nodeIdentityService.isPrivateKeyBacked()) {
+                try {
+                    String canonical = "BLOCK_VOTE|" + network + "|" + blockHeight + "|" + blockHash + "|" + myAddress;
+                    byte[] digest = com.m3rwallet.util.CryptoUtil.keccak256(canonical.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    byte[] sig = nodeIdentityService.signData(digest);
+                    signatureHex = org.apache.commons.codec.binary.Hex.encodeHexString(sig);
+                    pubKeyHex = nodeIdentityService.getNodePublicKey();
+                } catch (Exception ex) {
+                    log.warn("[BLOCK VOTE] Could not sign vote: {}", ex.getMessage());
+                }
+            }
+
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("vote", vote);
             result.put("voterAddress", myAddress);
@@ -757,6 +793,10 @@ public class WalletController {
             result.put("blockHash", blockHash);
             result.put("violations", violations);
             result.put("reason", vote ? "VALID" : String.join(",", violations));
+            if (!signatureHex.isBlank()) {
+                result.put("signature", signatureHex);
+                result.put("publicKey", pubKeyHex);
+            }
 
             log.info("[BLOCK VOTE] Block {} → vote: {} ({})", blockHeight, vote ? "YES" : "NO", vote ? "valid" : violations);
             return ResponseEntity.ok(result);
@@ -829,25 +869,33 @@ public class WalletController {
                 ));
             }
 
-            Validator v = new Validator();
-            v.setAddress(address);
-            v.setNetwork(network);
-            v.setStakedAmount(new BigDecimal(stakeStr));
-            v.setReliabilityScoreScaled(0L);
-            v.setStatus(Validator.ValidatorStatus.ACTIVE);
-            v.setRegisteredAt(System.currentTimeMillis());
-            v.setTotalProposals(0L);
-            v.setSuccessfulProposals(0L);
-            v.setCorruptedProposals(0L);
-            validatorRepo.save(v);
-
-            log.info("[VALIDATOR SYNC] Received validator: {} on {}", address, network);
-            return ResponseEntity.ok(Map.of("status", "REGISTERED", "address", address));
+            // F-03 REMEDIATION: Unauthenticated peer JSON cannot create active validators or set arbitrary stakes.
+            // Registrations must be authoritatively registered through local consensus/balance pipeline.
+            log.warn("[SECURITY][VALIDATOR SYNC] Rejected unauthenticated peer validator registration attempt for {} on {}", address, network);
+            return ResponseEntity.status(org.springframework.http.HttpStatus.FORBIDDEN)
+                    .body(Map.of("error", "Unauthenticated peer validator registration is prohibited"));
         } catch (Exception e) {
             log.error("Error receiving validator: {}", e.getMessage());
             return ResponseEntity.internalServerError()
                     .body(Map.of("error", e.getMessage()));
         }
+    }
+
+    @GetMapping("/{network}/validators/snapshot/{hash}")
+    @ResponseBody
+    public ResponseEntity<?> getValidatorSnapshot(
+            @PathVariable String network,
+            @PathVariable String hash) {
+        if (validatorService == null) {
+            return ResponseEntity.status(org.springframework.http.HttpStatus.NOT_FOUND)
+                    .body(Map.of("error", "Validator service unavailable"));
+        }
+        Optional<ValidatorService.ValidatorSetSnapshot> snap = validatorService.getSnapshotByHash(hash);
+        if (snap.isEmpty()) {
+            return ResponseEntity.status(org.springframework.http.HttpStatus.NOT_FOUND)
+                    .body(Map.of("error", "Snapshot not found: " + hash));
+        }
+        return ResponseEntity.ok(snap.get());
     }
 
     @GetMapping("/{network}/validator/{address}")

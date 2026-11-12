@@ -4,12 +4,12 @@ spring:
   datasource:
     url: jdbc:mysql://localhost:3306/m3rwallet_db?allowPublicKeyRetrieval=true&useSSL=false&serverTimezone=UTC
     username: root
-    password: {$DB_PASSWORD}
+    password: ${DB_PASSWORD:rootpass}
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
       connection-timeout: 30000
-      maximum-pool-size: 10
-      minimum-idle: 2
+      maximum-pool-size: 20
+      minimum-idle: 5
       auto-commit: true
       pool-name: M3R-Pool
   jpa:
@@ -40,14 +40,20 @@ logging:
 
 # Application Configuration
 app:
+  admin:
+    username: ${M3R_ADMIN_USERNAME:hululuadmin}
+    password: ${M3R_ADMIN_PASSWORD:puripuri saitama}
   broadcast-fee: 100
   percent-fee-bps: 100
   genesis-address: NQWWb4huPaqUncdJHFm2FHFjTo1qqLskuq
   consensus:
-    enabled: false
+    enabled: true
     timeout-ms: 2500
-    shared-secret: ""
-    peers: []
+    shared-secret: "local-test-secret"
+    peers:
+      - http://localhost:3000
+      - http://localhost:4000
+      - http://localhost:5000
   cors-origins: 
   faucet:
     max-amount: 100000
@@ -59,12 +65,17 @@ app:
 # Validator and fee policy additions (Day 2)
   validator:
     enabled: true
-    address: ""
+    address: ${M3R_VALIDATOR_ADDRESS:}
     minimum-stake: 1000
     slot-duration-ms: 15000
+    startup-proposal-delay-ms: 15000
+    selection-mode: round-robin
+    sync-interval-ms: 30000
+    sync-initial-delay-ms: 10000
     unbonding-period-blocks: 100
     reputation-decay-rate: 0.999
     initial-reputation: 0.0
+    require-balance: false
 
   fee-policy:
     broadcast-fee-bps: 2000
@@ -74,5 +85,15 @@ app:
 
   blockchain:
     network: mainnet
-    max-block-size: 5000
+    slot-ms: 15000
+    initial-delay-ms: 8000
+    max-block-size: 500
+    skip-empty-blocks: true
     finality-confirmations: 2
+
+  node:
+    self-url: http://localhost:${server.port:3000}
+    bootstrap-peers: ${NODE_BOOTSTRAP_PEERS:}
+    private-key: ${M3R_NODE_PRIVATE_KEY:}
+    block-sync-interval-ms: 10000
+    block-sync-initial-delay-ms: 8000

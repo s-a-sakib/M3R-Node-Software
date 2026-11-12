@@ -1,4 +1,52 @@
 <!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>M3R Node Admin — Escrows</title>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Sora:wght@300;400;600&display=swap" rel="stylesheet">
+  <style>
+    :root{--bg:#07080f;--panel:#111422;--border:#1e2235;--accent:#00d4aa;--accent2:#5b8df6;--warn:#f0a500;--danger:#e84560;--text:#e2e6f3;--muted:#5a6180;--mono:'JetBrains Mono',monospace;--ui:'Sora',sans-serif}
+    body{margin:0;font-family:var(--ui);background:var(--bg);color:var(--text)}.sidebar{width:220px;background:#0d0f1a;position:fixed;inset:0;padding:20px}
+    .main{margin-left:220px;padding:20px}.panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:14px}
+    table{width:100%;border-collapse:collapse}thead th{font-size:11px;color:var(--muted);padding:10px;border-bottom:1px solid var(--border)}tbody td{padding:12px;border-bottom:1px solid var(--border)}
+    .mono{font-family:var(--mono)}.muted{color:var(--muted)}
+    .pill-pending{background:rgba(240,165,0,.08);color:var(--warn);padding:4px 8px;border-radius:8px}
+    .pill-released{background:rgba(0,212,170,.08);color:var(--accent);padding:4px 8px;border-radius:8px}
+    .pill-disputed{background:rgba(232,69,96,.08);color:var(--danger);padding:4px 8px;border-radius:8px}
+    .pill-refunded{background:rgba(91,141,246,.08);color:var(--accent2);padding:4px 8px;border-radius:8px}
+  </style>
+</head>
+<body>
+  <aside class="sidebar"><div style="font-family:var(--mono);color:var(--accent);font-size:20px">M3R <span style="color:var(--text);font-weight:400;margin-left:6px">NODE ADMIN</span></div></aside>
+  <main class="main">
+    <header style="height:64px;display:flex;align-items:center;justify-content:space-between"><div style="font-weight:600">Escrows</div><div class="muted mono">Server-rendered list</div></header>
+    <div class="panel">
+      <table>
+        <thead><tr><th>ESCROW ID</th><th>BUYER</th><th>SELLER</th><th>AMOUNT</th><th>STATUS</th><th>CREATED</th></tr></thead>
+        <tbody>
+          <tr th:each="e : ${escrows}">
+            <td class="mono" th:text="${e.escrowId}">id</td>
+            <td class="mono" th:text="${e.buyer}">buyer</td>
+            <td class="mono" th:text="${e.seller}">seller</td>
+            <td class="mono" style="text-align:right" th:text="${e.amount}">0</td>
+            <td>
+              <span th:switch="${e.status}">
+                <span th:case="'PENDING'" class="pill-pending">PENDING</span>
+                <span th:case="'RELEASED'" class="pill-released">RELEASED</span>
+                <span th:case="'DISPUTED'" class="pill-disputed">DISPUTED</span>
+                <span th:case="'REFUNDED'" class="pill-refunded">REFUNDED</span>
+              </span>
+            </td>
+            <td class="muted mono" th:text="${e.createdAt}">time</td>
+          </tr>
+          <tr th:if="${escrows == null or #lists.isEmpty(escrows)}"><td colspan="6" class="muted">No escrows</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </main>
+</body>
+</html>
+<!DOCTYPE html>
 <html xmlns:th="http://www.thymeleaf.org" lang="en">
 <head>
     <meta charset="UTF-8">

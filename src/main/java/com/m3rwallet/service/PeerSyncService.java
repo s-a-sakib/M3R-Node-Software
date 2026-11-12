@@ -7,6 +7,7 @@ import com.m3rwallet.repository.BlockRepository;
 import com.m3rwallet.repository.BlockTransactionRepository;
 import com.m3rwallet.repository.PeerRepository;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.ResponseEntity;
@@ -32,6 +33,20 @@ public class PeerSyncService {
     private final String bootstrapPeersConfig;
     private final String network;
     private final ConsensusProperties consensusProperties;
+
+    @Autowired(required = false)
+    private ValidatorService validatorService;
+
+    @Autowired(required = false)
+    private BlockBroadcastService blockBroadcastService;
+
+    public void setBlockBroadcastService(BlockBroadcastService blockBroadcastService) {
+        this.blockBroadcastService = blockBroadcastService;
+    }
+
+    public void setValidatorService(ValidatorService validatorService) {
+        this.validatorService = validatorService;
+    }
 
     private static final int MAX_FAIL_COUNT = 5;
     private static final long HEALTH_CHECK_INTERVAL = 30_000L;
@@ -229,7 +244,7 @@ public class PeerSyncService {
         List<Peer> peers = peerRepository.findByNetworkAndIsAlive(network, true);
         for (Peer peer : peers) {
             try {
-                String url = peer.getPeerUrl() + "/api/node/block/latest?network=" + network;
+                String url = peer.getPeerUrl().replaceAll("/+$", "") + "/api/node/block/latest?network=" + network;
                 ResponseEntity<Map> resp = restTemplate.getForEntity(url, Map.class);
                 Map body = resp.getBody();
                 if (body == null) continue;
@@ -237,42 +252,75 @@ public class PeerSyncService {
                 long peerHeight = 0L;
                 if (h instanceof Number) peerHeight = ((Number) h).longValue();
                 else if (h instanceof String) peerHeight = Long.parseLong((String) h);
+
                 if (peerHeight > localHeight) {
                     for (long ht = localHeight + 1; ht <= peerHeight; ht++) {
                         try {
-                            String g = peer.getPeerUrl() + "/api/node/block/" + ht;
-                            ResponseEntity<Block> be = restTemplate.getForEntity(g, Block.class);
-                            Block fetched = be.getBody();
-                            if (fetched != null) {
-                                Optional<Block> sameHeight = blockRepository.findById(fetched.getBlockHeight());
-                                if (sameHeight.isPresent()) {
-                                    if (Objects.equals(sameHeight.get().getBlockHash(), fetched.getBlockHash())) {
-                                        continue; // identical block, nothing to do
-                                    }
-                                    // Different hash at same height -> fork conflict
-                                    if (peerHeight > localHeight) {
-                                        log.warn("[FORK] Conflict at height {}. Peer chain longer ({} vs {}). Rolling back.",
-                                                ht, peerHeight, localHeight);
-                                        rollbackToHeight(ht - 1, network);
-                                        // fall through to save fetched block from peer
-                                    } else {
-                                        log.warn("[FORK] Conflict at height {} but peer not longer. Holding.", ht);
-                                        break;
-                                    }
+                            // F-01 & F-04: Retrieve verifiable block payload with complete consensus proof
+                            Map<String, Object> payload = null;
+                            try {
+                                String blockUrl = peer.getPeerUrl().replaceAll("/+$", "") + "/" + network + "/blocks/" + ht;
+                                ResponseEntity<Map> blockResp = restTemplate.getForEntity(blockUrl, Map.class);
+                                if (blockResp.getStatusCode().is2xxSuccessful() && blockResp.getBody() != null) {
+                                    payload = (Map<String, Object>) blockResp.getBody();
                                 }
-                                if (!hasValidLocalParent(fetched)) {
-                                    log.warn("Skipping peer block {} from {} because parent is missing or mismatched",
-                                            ht, peer.getPeerUrl());
-                                    continue;
-                                }
-                                Optional<Block> already = blockRepository.findByBlockHashAndNetwork(fetched.getBlockHash(), network);
-                                if (already.isEmpty()) {
-                                    blockRepository.save(fetched);
-                                    log.info("Synced missing block {} from peer {}", ht, peer.getPeerUrl());
+                            } catch (Exception e) {
+                                log.debug("Could not fetch standard block view at height {} from {}: {}", ht, peer.getPeerUrl(), e.getMessage());
+                            }
+
+                            if (payload == null) {
+                                try {
+                                    String nodeBlockUrl = peer.getPeerUrl().replaceAll("/+$", "") + "/api/node/block/" + ht;
+                                    ResponseEntity<Map> nodeResp = restTemplate.getForEntity(nodeBlockUrl, Map.class);
+                                    if (nodeResp.getStatusCode().is2xxSuccessful() && nodeResp.getBody() != null) {
+                                        payload = (Map<String, Object>) nodeResp.getBody();
+                                    }
+                                } catch (Exception e) {
+                                    log.debug("Could not fetch node block view at height {} from {}: {}", ht, peer.getPeerUrl(), e.getMessage());
                                 }
                             }
+
+                            if (payload == null) {
+                                log.warn("Peer {} failed to supply block at height {}", peer.getPeerUrl(), ht);
+                                break;
+                            }
+
+                            // F-02: Protect finalized local chain history. A peer can never authorize deleting finalized blocks.
+                            Optional<Block> existingAtHeight = blockRepository.findByBlockHeightAndNetwork(ht, network);
+                            if (existingAtHeight.isPresent()) {
+                                Block localBlock = existingAtHeight.get();
+                                String localHash = localBlock.getBlockHash();
+                                String incomingHash = String.valueOf(payload.get("blockHash"));
+                                if (localHash != null && localHash.equalsIgnoreCase(incomingHash)) {
+                                    continue; // Already synchronized
+                                }
+                                if (Boolean.TRUE.equals(localBlock.getIsFinalized())) {
+                                    log.error("[SECURITY][FORK] Fork conflict at finalized height {}. Local finalized block {} cannot be rolled back by peer {} (claimed peer height={}). Rejecting peer chain.",
+                                            ht, localHash, peer.getPeerUrl(), peerHeight);
+                                    break; // Refuse to delete local finalized blocks!
+                                }
+                            }
+
+                            // F-01: Route every peer-supplied block through the shared validation & finalization pipeline
+                            if (blockBroadcastService != null) {
+                                Map<String, Object> receiveResult = blockBroadcastService.receiveBlock(payload, network);
+                                String status = String.valueOf(receiveResult.get("status"));
+                                if ("ACCEPTED".equalsIgnoreCase(status)) {
+                                    log.info("[PEER SYNC] Successfully verified and finalized block {} from {}", ht, peer.getPeerUrl());
+                                } else if ("ALREADY_KNOWN".equalsIgnoreCase(status)) {
+                                    log.debug("[PEER SYNC] Block {} from {} already known", ht, peer.getPeerUrl());
+                                } else {
+                                    log.warn("[PEER SYNC] Block {} from {} rejected by validation pipeline: {}. Halting peer sync.",
+                                            ht, peer.getPeerUrl(), receiveResult);
+                                    break; // Invalid block: halt sync immediately!
+                                }
+                            } else {
+                                log.warn("[PEER SYNC] BlockBroadcastService unavailable. Cannot validate peer block. Halting sync.");
+                                break;
+                            }
                         } catch (Exception ex) {
-                            log.warn("Failed to fetch block {} from {}: {}", ht, peer.getPeerUrl(), ex.getMessage());
+                            log.warn("Failed to fetch/process block {} from {}: {}", ht, peer.getPeerUrl(), ex.getMessage());
+                            break;
                         }
                     }
                     break;
@@ -303,26 +351,44 @@ public class PeerSyncService {
     }
 
     @Transactional
-    private void rollbackToHeight(long targetHeight, String network) {
+    public void rollbackToHeight(long targetHeight, String network) {
         try {
             List<Block> toDelete = blockRepository.findByNetworkAndBlockHeightGreaterThan(network, targetHeight);
             if (toDelete == null || toDelete.isEmpty()) return;
+
+            // F-02: Safety invariant: NEVER rollback or delete finalized blocks
+            for (Block b : toDelete) {
+                if (Boolean.TRUE.equals(b.getIsFinalized())) {
+                    log.error("[SECURITY][ROLLBACK DENIED] Attempted rollback of finalized block {} (hash={}). Rollback aborted to protect canonical history.",
+                            b.getBlockHeight(), b.getBlockHash());
+                    throw new IllegalStateException("Cannot rollback finalized block at height " + b.getBlockHeight());
+                }
+            }
+
             toDelete.sort(Comparator.comparingLong(Block::getBlockHeight).reversed());
             for (Block b : toDelete) {
                 try {
                     blockTransactionRepository.deleteByBlock(b);
                 } catch (Exception ex) {
-                    log.warn("[FORK-ROLLBACK] Failed to delete txs for block {}: {}", b.getBlockHeight(), ex.getMessage());
+                    log.warn("[ROLLBACK] Failed to delete txs for block {}: {}", b.getBlockHeight(), ex.getMessage());
                 }
                 try {
                     blockRepository.delete(b);
-                    log.warn("[FORK-ROLLBACK] Deleted forked block {} hash={}", b.getBlockHeight(), b.getBlockHash());
+                    log.warn("[ROLLBACK] Deleted unfinalized block {} hash={}", b.getBlockHeight(), b.getBlockHash());
                 } catch (Exception ex) {
-                    log.warn("[FORK-ROLLBACK] Failed to delete block {}: {}", b.getBlockHeight(), ex.getMessage());
+                    log.warn("[ROLLBACK] Failed to delete block {}: {}", b.getBlockHeight(), ex.getMessage());
                 }
             }
+
+            if (validatorService != null) {
+                try {
+                    validatorService.reconcileAllValidatorProposalStatistics(network);
+                } catch (Exception ignored) {}
+            }
+        } catch (IllegalStateException e) {
+            throw e;
         } catch (Exception e) {
-            log.warn("[FORK-ROLLBACK] Rollback failed: {}", e.getMessage());
+            log.warn("[ROLLBACK] Rollback failed: {}", e.getMessage());
         }
     }
 
